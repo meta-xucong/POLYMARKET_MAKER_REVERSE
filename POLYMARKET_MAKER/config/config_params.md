@@ -64,7 +64,7 @@
 | `topics.*` | 针对特定话题 ID/slug 的覆盖：可单独调整 `topic_name`、`min_edge`、`max_position_per_market`、`order_size`、`spread_target`、`refresh_interval_seconds`、`max_open_orders`。 | 按字段类型填写 | 仅覆盖需要调整的字段，其余沿用 `default`。 |
 
 ## filter_params.json —— 市场筛选参数
-驱动 `Customize_fliter_blacklist.py` 的 REST 筛选器，字段与命令行参数一致，支持高亮阈值等设置。【F:POLYMARKET_MAKER/config/filter_params.json†L1-L69】【F:Customize_fliter_blacklist.py†L723-L799】
+驱动 `Customize_fliter_blacklist.py` 的 REST 筛选器，字段与命令行参数一致，可配置高亮与价格反转检测等阈值。【F:POLYMARKET_MAKER/config/filter_params.json†L1-L71】【F:Customize_fliter_blacklist.py†L1214-L1280】
 
 | 字段 | 作用 | 类型/格式 | 推荐设置 |
 | --- | --- | --- | --- |
@@ -77,12 +77,19 @@
 | `skip_orderbook` | 是否跳过订单簿/价格回补。 | 布尔 | 仅诊断或节省请求时使用。 |
 | `no_rest_backfill` | 关闭 REST 回补（默认开启）。 | 布尔 | 一般保持 `false`。 |
 | `books_batch_size` | `/books` 回补的 token_id 批量大小。 | 整数 | 100~500。 |
+| `books_timeout_sec` | `/books` 回补单次请求超时。 | 浮点（秒） | 3~10。 |
 | `only` | 仅处理包含该子串的 slug/title（大小写不敏感）。 | 字符串 | 留空表示不过滤。 |
 | `blacklist_terms` | 标题/slug 命中任意黑名单词条即跳过。 | 字符串数组 | 可按需增删。 |
 | `highlight.max_hours` | 高亮条件：距离结束 ≤ 该小时数。 | 浮点（小时） | 24~72。 |
-| `highlight.ask_min` | 高亮条件：卖一价不低于该值。 | 0~1 小数 | 0.9~0.99。 |
-| `highlight.ask_max` | 高亮条件：卖一价不高于该值。 | 0~1 小数 | 0.95~0.999。 |
 | `highlight.min_total_volume` | 高亮条件：总成交量下限（USDC）。 | 浮点 | 1_000~50_000。 |
-| `highlight.max_ask_diff` | 高亮条件：单边点差上限（|ask-bid|）。 | 0~1 小数 | 0.05~0.2。 |
+| `highlight.max_ask_diff` | 高亮条件：单边点差上限（|ask-bid|），YES/NO 任一侧满足即可。 | 0~1 小数 | 0.05~0.2。 |
+| `reversal.enabled` | 是否开启价格反转检测，高亮时会优先筛选命中反转的市场。 | 布尔 | 建议保持 `true`。 |
+| `reversal.p1` | 反转判定：旧段最高价需低于该值。 | 0~1 小数 | 0.3~0.4。 |
+| `reversal.p2` | 反转判定：近段最高价需高于该值。 | 0~1 小数 | 0.75~0.85。 |
+| `reversal.window_hours` | 近段回溯窗口大小。 | 浮点（小时） | 1~6。 |
+| `reversal.lookback_days` | 旧段回溯天数。 | 浮点（天） | 3~7。 |
+| `reversal.short_interval` | 预筛时短窗口的 interval 表达式。 | 字符串（如 `6h`） | 与策略保持一致即可。 |
+| `reversal.short_fidelity` | 短窗口 fidelity（分钟级采样）。 | 整数 | 10~30。 |
+| `reversal.long_fidelity` | 长窗口 fidelity（分钟级采样）。 | 整数 | 30~90。 |
 
-> 提示：`filter_params.json` 直接对应命令行参数，修改后无需转换即可被 `Customize_fliter_blacklist.py` 读取并复用。【F:Customize_fliter_blacklist.py†L723-L771】
+> 提示：`filter_params.json` 直接对应命令行参数，修改后无需转换即可被 `Customize_fliter_blacklist.py` 读取并复用，且高亮/反转参数会覆盖脚本顶部的默认值。【F:Customize_fliter_blacklist.py†L1214-L1280】【F:Customize_fliter_blacklist.py†L1249-L1280】
