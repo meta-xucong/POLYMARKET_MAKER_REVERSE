@@ -1093,14 +1093,23 @@ def collect_filter_results(
 
     print(
         f"[HEARTBEAT] 初筛完成：候选 {len(market_list)} / {len(mkts_raw)}，"
-        f"被拒 {len(early_rejects)}，开始反转检测/报价回补…",
+        f"被拒 {len(early_rejects)}，开始高亮预选…",
         flush=True,
     )
     _print_topics_summary(market_list, stage="粗筛通过")
 
-    if enable_reversal and market_list:
-        total_markets = len(market_list)
-        for idx, ms in enumerate(market_list, start=1):
+    highlight_candidates: List[MarketSnapshot] = [
+        ms for ms in market_list if _highlight_outcomes(ms, require_reversal=False)
+    ]
+    _print_topics_summary(highlight_candidates, stage="高亮预选")
+
+    if enable_reversal and highlight_candidates:
+        print(
+            f"[HEARTBEAT] 开始价格反转检测：{len(highlight_candidates)} 个市场，p1={reversal_p1}, p2={reversal_p2}, window={reversal_window_hours}h, lookback={reversal_lookback_days}d",
+            flush=True,
+        )
+        total_markets = len(highlight_candidates)
+        for idx, ms in enumerate(highlight_candidates, start=1):
             token_id = ms.yes.token_id or ms.no.token_id
             side = "YES" if ms.yes.token_id else "NO"
             try:
@@ -1125,7 +1134,7 @@ def collect_filter_results(
                     flush=True,
                 )
     else:
-        for ms in market_list:
+        for ms in highlight_candidates:
             ms.reversal_hit = True
             ms.reversal_side = ms.reversal_side or "YES"
             ms.reversal_detail = ms.reversal_detail or {"reason": "未启用反转检测"}
@@ -1363,9 +1372,14 @@ def main():
             )
             _print_topics_summary(candidates, stage=f"分片 {chunk_idx} 粗筛通过")
 
+            highlight_candidates = [
+                ms for ms in candidates if _highlight_outcomes(ms, require_reversal=False)
+            ]
+            _print_topics_summary(highlight_candidates, stage=f"分片 {chunk_idx} 高亮预选")
+
             # 分片内批量 REST 回补
-            if rev_enable and candidates:
-                for ms in candidates:
+            if rev_enable and highlight_candidates:
+                for ms in highlight_candidates:
                     token_id = ms.yes.token_id or ms.no.token_id
                     side = "YES" if ms.yes.token_id else "NO"
                     try:
@@ -1385,7 +1399,7 @@ def main():
                     ms.reversal_side = side
                     ms.reversal_detail = detail
             else:
-                for ms in candidates:
+                for ms in highlight_candidates:
                     ms.reversal_hit = True
                     ms.reversal_side = ms.reversal_side or "YES"
                     ms.reversal_detail = ms.reversal_detail or {"reason": "未启用反转检测"}
