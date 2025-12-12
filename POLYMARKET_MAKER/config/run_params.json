@@ -18,10 +18,10 @@
   "sell_mode": "aggressive",
   "buy_price_threshold": null,
   "drop_window_minutes": 60,
-  "drop_pct": 0.001,
-  "profit_pct": 0.005,
+  "drop_pct": 0.01,
+  "profit_pct": 0.03,
   "enable_incremental_drop_pct": true,
-  "incremental_drop_pct_step": 0.0002,
+  "incremental_drop_pct_step": 0.002,
   "countdown": {
     "minutes_before_end": 300,
     "absolute_time": null,
