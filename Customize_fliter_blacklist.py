@@ -997,9 +997,21 @@ def _best_outcome(hits: List[Tuple[OutcomeSnapshot, float]]) -> Tuple[OutcomeSna
     return ranked[0]
 
 
-def _print_topics_summary(markets: List[MarketSnapshot], stage: str = "粗筛通过") -> None:
+def _print_topics_summary(
+    markets: List[MarketSnapshot],
+    *,
+    stage: str = "粗筛通过",
+    show_details: bool = True,
+) -> None:
     if not markets:
         print(f"[HEARTBEAT] {stage}：当前无候选。", flush=True)
+        return
+
+    if not show_details:
+        print(
+            f"[HEARTBEAT] {stage}：共 {len(markets)} 个候选（仅统计数量，不展开）。",
+            flush=True,
+        )
         return
 
     print(
@@ -1096,7 +1108,7 @@ def collect_filter_results(
         f"被拒 {len(early_rejects)}，开始高亮预选…",
         flush=True,
     )
-    _print_topics_summary(market_list, stage="粗筛通过")
+    _print_topics_summary(market_list, stage="粗筛通过", show_details=False)
 
     highlight_candidates: List[MarketSnapshot] = [
         ms for ms in market_list if _highlight_outcomes(ms, require_reversal=False)
@@ -1370,7 +1382,14 @@ def main():
                 f"[HEARTBEAT] 流式分片 {chunk_idx} 初筛通过 {len(candidates)} / {len(chunk_raw)}，累计原始进度 {processed}/{total}",
                 flush=True,
             )
-            _print_topics_summary(candidates, stage=f"分片 {chunk_idx} 粗筛通过")
+            _print_topics_summary(
+                candidates, stage=f"分片 {chunk_idx} 粗筛通过", show_details=False
+            )
+
+            highlight_candidates = [
+                ms for ms in candidates if _highlight_outcomes(ms, require_reversal=False)
+            ]
+            _print_topics_summary(highlight_candidates, stage=f"分片 {chunk_idx} 高亮预选")
 
             highlight_candidates = [
                 ms for ms in candidates if _highlight_outcomes(ms, require_reversal=False)
