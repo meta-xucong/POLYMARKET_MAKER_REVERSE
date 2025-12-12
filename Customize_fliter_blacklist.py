@@ -762,57 +762,7 @@ def _final_pass_reason(ms: MarketSnapshot, require_quotes: bool) -> Tuple[bool, 
 # 打印
 # -------------------------------
 
-DEFAULT_BLACKLIST_TERMS = [
-    "Bitcoin",
-    "BTC",
-    "ETH",
-    "Ethereum",
-    "Sol",
-    "Solana",
-    "Doge",
-    "Dogecoin",
-    "BNB",
-    "Binance",
-    "Cardano",
-    "ADA",
-    "XRP",
-    "Ripple",
-    "Matic",
-    "Polygon",
-    "Crypto",
-    "Cryptocurrency",
-    "Blockchain",
-    "Token",
-    "NFT",
-    "DeFi",
-    "vs",
-    "odds",
-    "score",
-    "spread",
-    "moneyline",
-    "win",
-    "Esports",
-    "CS2",
-    "Cup",
-    "Arsenal",
-    "Liverpool",
-    "Chelsea",
-    "EPL",
-    "PGA",
-    "Tour Championship",
-    "Scottie Scheffler",
-    "Vitality",
-    "MOUZ",
-    "Falcons",
-    "The MongolZ",
-    "AL",
-    "Houston",
-    "Chicago",
-    "New York",
-    "Will Elon Musk post",
-    "dota2",
-    "a dozen eggs",
-]
+DEFAULT_BLACKLIST_TERMS: List[str] = []
 
 def _build_blacklist_patterns(terms: Iterable[str]) -> List[Tuple[str, re.Pattern[str]]]:
     patterns: List[Tuple[str, re.Pattern[str]]] = []
@@ -845,7 +795,7 @@ def set_blacklist_terms(terms: Iterable[str]) -> None:
         seen.add(t.lower())
         cleaned.append(t)
 
-    BLACKLIST_TERMS = cleaned or list(DEFAULT_BLACKLIST_TERMS)
+    BLACKLIST_TERMS = cleaned
     BLACKLIST_PATTERNS = _build_blacklist_patterns(BLACKLIST_TERMS)
     print(f"[CONFIG] 黑名单关键词已更新：{len(BLACKLIST_TERMS)} 条。")
 
