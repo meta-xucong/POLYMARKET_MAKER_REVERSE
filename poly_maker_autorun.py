@@ -385,9 +385,7 @@ class FilterConfig:
     books_batch_size: int = 200
     books_timeout_sec: float = 5.0
     only: str = ""
-    blacklist_terms: List[str] = field(
-        default_factory=lambda: list(filter_script.DEFAULT_BLACKLIST_TERMS)
-    )
+    blacklist_terms: List[str] = field(default_factory=list)
     highlight: HighlightConfig = field(default_factory=HighlightConfig)
     reversal: ReversalConfig = field(default_factory=ReversalConfig)
 
@@ -411,9 +409,7 @@ class FilterConfig:
             ),
             only=str(data.get("only", cls.only)),
             blacklist_terms=[
-                str(t).strip()
-                for t in data.get("blacklist_terms", filter_script.DEFAULT_BLACKLIST_TERMS)
-                if str(t).strip()
+                str(t).strip() for t in data.get("blacklist_terms", []) if str(t).strip()
             ],
             highlight=highlight_conf,
             reversal=reversal_conf,
