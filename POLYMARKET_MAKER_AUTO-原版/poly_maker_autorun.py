@@ -296,8 +296,6 @@ class GlobalConfig:
 @dataclass
 class HighlightConfig:
     max_hours: Optional[float] = 72.0
-    ask_min: Optional[float] = 0.80
-    ask_max: Optional[float] = 0.99
     min_total_volume: Optional[float] = 20000.0
     max_ask_diff: Optional[float] = 0.2
 
@@ -306,8 +304,6 @@ class HighlightConfig:
         data = data or {}
         return cls(
             max_hours=data.get("max_hours", cls.max_hours),
-            ask_min=data.get("ask_min", cls.ask_min),
-            ask_max=data.get("ask_max", cls.ask_max),
             min_total_volume=data.get("min_total_volume", cls.min_total_volume),
             max_ask_diff=data.get("max_ask_diff", cls.max_ask_diff),
         )
@@ -315,10 +311,6 @@ class HighlightConfig:
     def apply_to_filter(self) -> None:
         if self.max_hours is not None:
             filter_script.HIGHLIGHT_MAX_HOURS = float(self.max_hours)
-        if self.ask_min is not None:
-            filter_script.HIGHLIGHT_ASK_MIN = float(self.ask_min)
-        if self.ask_max is not None:
-            filter_script.HIGHLIGHT_ASK_MAX = float(self.ask_max)
         if self.min_total_volume is not None:
             filter_script.HIGHLIGHT_MIN_TOTAL_VOLUME = float(self.min_total_volume)
         if self.max_ask_diff is not None:
@@ -327,10 +319,56 @@ class HighlightConfig:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "max_hours": self.max_hours,
-            "ask_min": self.ask_min,
-            "ask_max": self.ask_max,
             "min_total_volume": self.min_total_volume,
             "max_ask_diff": self.max_ask_diff,
+        }
+
+
+@dataclass
+class ReversalConfig:
+    enabled: bool = True
+    p1: float = filter_script.REVERSAL_P1
+    p2: float = filter_script.REVERSAL_P2
+    window_hours: float = filter_script.REVERSAL_WINDOW_HOURS
+    lookback_days: float = filter_script.REVERSAL_LOOKBACK_DAYS
+    short_interval: str = filter_script.REVERSAL_SHORT_INTERVAL
+    short_fidelity: int = filter_script.REVERSAL_SHORT_FIDELITY
+    long_fidelity: int = filter_script.REVERSAL_LONG_FIDELITY
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "ReversalConfig":
+        data = data or {}
+        return cls(
+            enabled=bool(data.get("enabled", cls.enabled)),
+            p1=float(data.get("p1", cls.p1)),
+            p2=float(data.get("p2", cls.p2)),
+            window_hours=float(data.get("window_hours", cls.window_hours)),
+            lookback_days=float(data.get("lookback_days", cls.lookback_days)),
+            short_interval=str(data.get("short_interval", cls.short_interval)),
+            short_fidelity=int(data.get("short_fidelity", cls.short_fidelity)),
+            long_fidelity=int(data.get("long_fidelity", cls.long_fidelity)),
+        )
+
+    def apply_to_filter(self) -> None:
+        filter_script.REVERSAL_ENABLED = bool(self.enabled)
+        filter_script.REVERSAL_P1 = float(self.p1)
+        filter_script.REVERSAL_P2 = float(self.p2)
+        filter_script.REVERSAL_WINDOW_HOURS = float(self.window_hours)
+        filter_script.REVERSAL_LOOKBACK_DAYS = float(self.lookback_days)
+        filter_script.REVERSAL_SHORT_INTERVAL = str(self.short_interval)
+        filter_script.REVERSAL_SHORT_FIDELITY = int(self.short_fidelity)
+        filter_script.REVERSAL_LONG_FIDELITY = int(self.long_fidelity)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "p1": self.p1,
+            "p2": self.p2,
+            "window_hours": self.window_hours,
+            "lookback_days": self.lookback_days,
+            "short_interval": self.short_interval,
+            "short_fidelity": self.short_fidelity,
+            "long_fidelity": self.long_fidelity,
         }
 
 
@@ -351,11 +389,13 @@ class FilterConfig:
         default_factory=lambda: list(filter_script.DEFAULT_BLACKLIST_TERMS)
     )
     highlight: HighlightConfig = field(default_factory=HighlightConfig)
+    reversal: ReversalConfig = field(default_factory=ReversalConfig)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "FilterConfig":
         data = data or {}
         highlight_conf = HighlightConfig.from_dict(data.get("highlight"))
+        reversal_conf = ReversalConfig.from_dict(data.get("reversal"))
         return cls(
             min_end_hours=float(data.get("min_end_hours", cls.min_end_hours)),
             max_end_days=int(data.get("max_end_days", cls.max_end_days)),
@@ -376,6 +416,7 @@ class FilterConfig:
                 if str(t).strip()
             ],
             highlight=highlight_conf,
+            reversal=reversal_conf,
         )
 
     def to_filter_kwargs(self) -> Dict[str, Any]:
@@ -392,12 +433,21 @@ class FilterConfig:
             "books_timeout": self.books_timeout_sec,
             "only": self.only,
             "blacklist_terms": self.blacklist_terms,
+            "enable_reversal": self.reversal.enabled,
+            "reversal_p1": self.reversal.p1,
+            "reversal_p2": self.reversal.p2,
+            "reversal_window_hours": self.reversal.window_hours,
+            "reversal_lookback_days": self.reversal.lookback_days,
+            "reversal_short_interval": self.reversal.short_interval,
+            "reversal_short_fidelity": self.reversal.short_fidelity,
+            "reversal_long_fidelity": self.reversal.long_fidelity,
         }
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             **self.to_filter_kwargs(),
             "highlight": self.highlight.to_dict(),
+            "reversal": self.reversal.to_dict(),
         }
 
     def apply_highlight(self) -> None:
@@ -405,6 +455,9 @@ class FilterConfig:
 
     def apply_blacklist(self) -> None:
         filter_script.set_blacklist_terms(self.blacklist_terms)
+
+    def apply_reversal(self) -> None:
+        self.reversal.apply_to_filter()
 
 
 @dataclass
@@ -1156,6 +1209,7 @@ def run_filter_once(
 
     filter_conf.apply_blacklist()
     filter_conf.apply_highlight()
+    filter_conf.apply_reversal()
 
     attempts = max(1, int(max_retries) + 1)
     for attempt in range(1, attempts + 1):

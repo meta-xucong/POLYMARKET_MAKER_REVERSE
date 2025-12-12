@@ -42,6 +42,16 @@ HIGHLIGHT_ASK_MAX: float     = 0.995
 HIGHLIGHT_MIN_TOTAL_VOLUME: float = 10000.0  # 总交易量≥此值（USDC）
 HIGHLIGHT_MAX_ASK_DIFF: float = 0.10         # 同一 token 点差 |ask - bid| ≤ 此阈值（YES 或 NO 任一侧满足即可）
 
+# 价格反转检测默认参数
+REVERSAL_ENABLED: bool = True
+REVERSAL_P1: float = 0.35                 # 旧段最高价上限
+REVERSAL_P2: float = 0.80                 # 近段最高价下限
+REVERSAL_WINDOW_HOURS: float = 2.0        # 近段窗口（小时）
+REVERSAL_LOOKBACK_DAYS: float = 5.0       # 旧段回溯天数
+REVERSAL_SHORT_INTERVAL: str = "6h"      # 短窗口 interval 触发
+REVERSAL_SHORT_FIDELITY: int = 15         # 短窗口 fidelity
+REVERSAL_LONG_FIDELITY: int = 60          # 长窗口 fidelity
+
 
 # -------------------------------
 # 小工具
@@ -152,6 +162,9 @@ class MarketSnapshot:
     resolved: Optional[bool] = None
     acceptingOrders: Optional[bool] = None
     end_time: Optional[dt.datetime] = None
+    reversal_hit: bool = False
+    reversal_side: Optional[str] = None
+    reversal_detail: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -504,6 +517,191 @@ def _rest_books_backfill(
                 continue
 
 # -------------------------------
+# 价格历史与反转检测
+# -------------------------------
+
+def _ts_from_dt(value: dt.datetime) -> float:
+    try:
+        return value.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _normalize_ts(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            v = float(value)
+            if v > 1e12:  # 毫秒时间戳
+                v = v / 1000.0
+            return v
+        if isinstance(value, str):
+            v = value.strip()
+            if not v:
+                return None
+            try:
+                num = float(v)
+                if num > 1e12:
+                    num = num / 1000.0
+                return num
+            except Exception:
+                dt_obj = _parse_dt(v)
+                if dt_obj:
+                    return _ts_from_dt(dt_obj)
+                return None
+    except Exception:
+        return None
+    return None
+
+
+def _extract_price(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except Exception:
+            return None
+    return None
+
+
+def _price_points_from_history(raw: Any) -> List[Tuple[float, float]]:
+    data = raw
+    if isinstance(raw, dict):
+        for key in ("prices", "data", "items", "result"):
+            if isinstance(raw.get(key), list):
+                data = raw.get(key)
+                break
+
+    if not isinstance(data, list):
+        return []
+
+    points: List[Tuple[float, float]] = []
+    for item in data:
+        ts: Optional[float] = None
+        price: Optional[float] = None
+
+        if isinstance(item, dict):
+            for tk in ("timestamp", "time", "ts", "t", "date"):
+                ts = _normalize_ts(item.get(tk))
+                if ts is not None:
+                    break
+            for pk in ("price", "mid", "value", "avg", "close", "last", "p"):
+                price = _extract_price(item.get(pk))
+                if price is not None:
+                    break
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            ts = _normalize_ts(item[0])
+            price = _extract_price(item[1])
+
+        if ts is None or price is None:
+            continue
+        points.append((ts, price))
+
+    points.sort(key=lambda x: x[0])
+    return points
+
+
+def fetch_prices_history(
+    token_id: str,
+    *,
+    start_ts: Optional[float] = None,
+    end_ts: Optional[float] = None,
+    interval: Optional[str] = None,
+    fidelity: Optional[int] = None,
+    timeout: float = 10.0,
+) -> List[Tuple[float, float]]:
+    params: Dict[str, Any] = {"market": token_id}
+    if start_ts is not None and end_ts is not None:
+        params["startTs"] = int(start_ts)
+        params["endTs"] = int(end_ts)
+    elif interval:
+        params["interval"] = interval
+    if fidelity is not None:
+        params["fidelity"] = fidelity
+
+    url = f"{_POLY_HOST}/prices-history"
+    try:
+        r = requests.get(url, params=params, timeout=timeout)
+        r.raise_for_status()
+        return _price_points_from_history(r.json())
+    except Exception as e:
+        print(f"[WARN] 获取价格历史失败 token={token_id} params={params}: {e}", file=sys.stderr)
+        return []
+
+
+def _max_price_in_range(points: List[Tuple[float, float]], start_ts: float, end_ts: float) -> Optional[float]:
+    vals = [p for ts, p in points if start_ts <= ts <= end_ts]
+    if not vals:
+        return None
+    try:
+        return float(max(vals))
+    except Exception:
+        return None
+
+
+def detect_reversal(
+    token_id: Optional[str],
+    *,
+    p1: float = REVERSAL_P1,
+    p2: float = REVERSAL_P2,
+    window_hours: float = REVERSAL_WINDOW_HOURS,
+    lookback_days: float = REVERSAL_LOOKBACK_DAYS,
+    short_interval: str = REVERSAL_SHORT_INTERVAL,
+    short_fidelity: int = REVERSAL_SHORT_FIDELITY,
+    long_fidelity: int = REVERSAL_LONG_FIDELITY,
+) -> Tuple[bool, Dict[str, Any]]:
+    if not token_id:
+        return False, {"reason": "缺少 token_id"}
+
+    now = _now_utc()
+    now_ts = _ts_from_dt(now)
+    recent_start_ts = now_ts - float(window_hours) * 3600.0
+    lookback_start_ts = now_ts - float(lookback_days) * 86400.0
+
+    short_points = fetch_prices_history(
+        token_id,
+        interval=short_interval,
+        fidelity=short_fidelity,
+    )
+    max_recent_short = _max_price_in_range(short_points, recent_start_ts, now_ts)
+    if max_recent_short is None or max_recent_short < p2:
+        return False, {
+            "reason": "短窗口未触发",
+            "max_recent_short": max_recent_short,
+            "points_short": len(short_points),
+        }
+
+    long_points = fetch_prices_history(
+        token_id,
+        start_ts=lookback_start_ts,
+        end_ts=now_ts,
+        fidelity=long_fidelity,
+    )
+
+    max_recent = _max_price_in_range(long_points, recent_start_ts, now_ts)
+    max_old = _max_price_in_range(long_points, lookback_start_ts, recent_start_ts)
+
+    hit = bool(max_recent is not None and max_recent >= p2 and max_old is not None and max_old < p1)
+    detail = {
+        "points_long": len(long_points),
+        "points_short": len(short_points),
+        "max_recent": max_recent,
+        "max_old": max_old,
+        "max_recent_short": max_recent_short,
+        "window_hours": window_hours,
+        "lookback_days": lookback_days,
+        "p1": p1,
+        "p2": p2,
+    }
+    if not hit:
+        detail["reason"] = "长窗口未满足反转"
+    return hit, detail
+
+# -------------------------------
 # 最终筛选（在回补后判断报价）
 # -------------------------------
 
@@ -656,23 +854,22 @@ def _blacklist_hit(ms: MarketSnapshot) -> Optional[str]:
 
 
 
-def _highlight_outcomes(ms: MarketSnapshot,
-                        max_hours: Optional[float] = None,
-                        ask_min: Optional[float] = None,
-                        ask_max: Optional[float] = None,
-                        min_total_volume: Optional[float] = None,
-                        max_ask_diff: Optional[float] = None) -> List[Tuple[OutcomeSnapshot, float]]:
+def _highlight_outcomes(
+    ms: MarketSnapshot,
+    max_hours: Optional[float] = None,
+    min_total_volume: Optional[float] = None,
+    max_ask_diff: Optional[float] = None,
+    require_reversal: bool = True,
+) -> List[Tuple[OutcomeSnapshot, float]]:
     """
     高亮（严格口径）筛选条件：
     - 剩余时间 ≤ max_hours（默认 HIGHLIGHT_MAX_HOURS）
-    - 卖一价 ask ∈ [ask_min, ask_max]（默认 HIGHLIGHT_ASK_MIN/HIGHLIGHT_ASK_MAX）
     - 总交易量 totalVolume ≥ min_total_volume（默认 HIGHLIGHT_MIN_TOTAL_VOLUME）
     - 同一 token 的点差 |ask - bid| ≤ max_ask_diff（YES 或 NO 任一满足即可；默认 HIGHLIGHT_MAX_ASK_DIFF）
+    - 价格反转命中（默认强制）
     - 不命中黑名单
     """
     mh = HIGHLIGHT_MAX_HOURS if max_hours is None else max_hours
-    lo = HIGHLIGHT_ASK_MIN if ask_min is None else ask_min
-    hi = HIGHLIGHT_ASK_MAX if ask_max is None else ask_max
     mv = HIGHLIGHT_MIN_TOTAL_VOLUME if min_total_volume is None else min_total_volume
     mdiff = HIGHLIGHT_MAX_ASK_DIFF if max_ask_diff is None else max_ask_diff
 
@@ -680,6 +877,9 @@ def _highlight_outcomes(ms: MarketSnapshot,
     if hours is None or hours < 0 or hours > mh:
         return []
     if _blacklist_hit(ms):
+        return []
+
+    if require_reversal and not ms.reversal_hit:
         return []
 
     # 交易量要求
@@ -692,20 +892,36 @@ def _highlight_outcomes(ms: MarketSnapshot,
     if tv < mv:
         return []
 
-    # 单边点差（同一 token 内 ask-bid）约束在逐项判定中完成
-
     matches: List[Tuple[OutcomeSnapshot, float]] = []
-    for snap in (ms.yes, ms.no):
-        ask_ok = (snap.ask is not None and lo <= snap.ask <= hi)
-        spread_ok = (snap.bid is not None and snap.ask is not None and abs(float(snap.ask) - float(snap.bid)) <= mdiff)
-        if ask_ok and spread_ok:
+    candidates: List[OutcomeSnapshot] = []
+    if ms.reversal_side and ms.reversal_side.upper() == "NO":
+        candidates = [ms.no, ms.yes]
+    elif ms.reversal_side and ms.reversal_side.upper() == "YES":
+        candidates = [ms.yes, ms.no]
+    else:
+        candidates = [ms.yes, ms.no]
+
+    for snap in candidates:
+        spread_ok = True
+        if mdiff is not None and snap.bid is not None and snap.ask is not None:
+            spread_ok = abs(float(snap.ask) - float(snap.bid)) <= mdiff
+        if spread_ok:
             matches.append((snap, hours))
+            break
     return matches
 
 
 def _highlight_label() -> str:
-    return (f"≤{int(HIGHLIGHT_MAX_HOURS)}h & ask在 {HIGHLIGHT_ASK_MIN:.3f}-{HIGHLIGHT_ASK_MAX:.3f} "
-            f"& 总交易量≥{int(HIGHLIGHT_MIN_TOTAL_VOLUME)}USDC & 单边点差≤{HIGHLIGHT_MAX_ASK_DIFF:.2f} & 非黑名单")
+    rev = (
+        "反转命中"
+        if REVERSAL_ENABLED
+        else "(未启用反转)"
+    )
+    return (
+        f"≤{int(HIGHLIGHT_MAX_HOURS)}h & {rev} "
+        f"& 总交易量≥{int(HIGHLIGHT_MIN_TOTAL_VOLUME)}USDC "
+        f"& 单边点差≤{HIGHLIGHT_MAX_ASK_DIFF:.2f} & 非黑名单"
+    )
 
 
 def _event_key(ms: MarketSnapshot) -> Optional[str]:
@@ -759,8 +975,29 @@ def collect_filter_results(
     only: str = "",
     blacklist_terms: Optional[Iterable[str]] = None,
     prefetched_markets: Optional[List[Dict[str, Any]]] = None,
+    enable_reversal: bool = REVERSAL_ENABLED,
+    reversal_p1: float = REVERSAL_P1,
+    reversal_p2: float = REVERSAL_P2,
+    reversal_window_hours: float = REVERSAL_WINDOW_HOURS,
+    reversal_lookback_days: float = REVERSAL_LOOKBACK_DAYS,
+    reversal_short_interval: str = REVERSAL_SHORT_INTERVAL,
+    reversal_short_fidelity: int = REVERSAL_SHORT_FIDELITY,
+    reversal_long_fidelity: int = REVERSAL_LONG_FIDELITY,
 ) -> FilterResult:
     """执行一次筛选流程并返回结构化结果。"""
+
+    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P2, REVERSAL_WINDOW_HOURS
+    global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
+    global REVERSAL_LONG_FIDELITY
+
+    REVERSAL_ENABLED = enable_reversal
+    REVERSAL_P1 = reversal_p1
+    REVERSAL_P2 = reversal_p2
+    REVERSAL_WINDOW_HOURS = reversal_window_hours
+    REVERSAL_LOOKBACK_DAYS = reversal_lookback_days
+    REVERSAL_SHORT_INTERVAL = reversal_short_interval
+    REVERSAL_SHORT_FIDELITY = reversal_short_fidelity
+    REVERSAL_LONG_FIDELITY = reversal_long_fidelity
 
     if blacklist_terms is not None:
         set_blacklist_terms(blacklist_terms)
@@ -795,6 +1032,32 @@ def collect_filter_results(
         else:
             early_rejects.append((ms, reason))
 
+    if enable_reversal and market_list:
+        for ms in market_list:
+            token_id = ms.yes.token_id or ms.no.token_id
+            side = "YES" if ms.yes.token_id else "NO"
+            try:
+                hit, detail = detect_reversal(
+                    token_id,
+                    p1=reversal_p1,
+                    p2=reversal_p2,
+                    window_hours=reversal_window_hours,
+                    lookback_days=reversal_lookback_days,
+                    short_interval=reversal_short_interval,
+                    short_fidelity=reversal_short_fidelity,
+                    long_fidelity=reversal_long_fidelity,
+                )
+            except Exception as exc:
+                hit, detail = False, {"reason": f"反转检测异常: {exc}"}
+            ms.reversal_hit = hit
+            ms.reversal_side = side
+            ms.reversal_detail = detail
+    else:
+        for ms in market_list:
+            ms.reversal_hit = True
+            ms.reversal_side = ms.reversal_side or "YES"
+            ms.reversal_detail = ms.reversal_detail or {"reason": "未启用反转检测"}
+
     if not skip_orderbook and market_list and (not no_rest_backfill):
         _rest_books_backfill(
             market_list, batch_size=books_batch_size, timeout=books_timeout
@@ -815,7 +1078,7 @@ def collect_filter_results(
     highlights: List[HighlightedOutcome] = []
 
     for ms in chosen:
-        hits = _highlight_outcomes(ms)
+        hits = _highlight_outcomes(ms, require_reversal=enable_reversal)
         if not hits:
             continue
         snap, hours = _best_outcome(hits)
@@ -875,10 +1138,22 @@ def _print_highlighted(highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, f
         bid = "-" if snap.bid is None else f"{snap.bid:.4f}"
         ask = "-" if snap.ask is None else f"{snap.ask:.4f}"
         end_iso = ms.end_time.isoformat() if ms.end_time else "-"
+        detail = ms.reversal_detail or {}
+        rev_status = "REV✔" if ms.reversal_hit else "REV✘"
+        max_old = detail.get("max_old")
+        max_recent = detail.get("max_recent") or detail.get("max_recent_short")
+        rev_desc_parts = [rev_status]
+        if max_old is not None:
+            rev_desc_parts.append(f"old_max={max_old:.3f}")
+        if max_recent is not None:
+            rev_desc_parts.append(f"recent_max={max_recent:.3f}")
+        if detail.get("reason"):
+            rev_desc_parts.append(str(detail.get("reason")))
+        rev_desc = "; ".join(rev_desc_parts)
         print(
             f"  [{idx}] slug={ms.slug} | 标题={ms.title} | 方向={snap.name}"
             f" | token_id={snap.token_id or '-'} | bid/ask={bid}/{ask}"
-            f" | ends_in={hours}h | end_time={end_iso}"
+            f" | ends_in={hours}h | end_time={end_iso} | {rev_desc}"
         )
 
 
@@ -904,14 +1179,20 @@ def main():
     # 高亮（严格口径）参数：不指定时使用脚本顶部的 HIGHLIGHT_* 默认值
     ap.add_argument("--hl-max-hours", type=float, default=None,
                     help="高亮条件：剩余时间 ≤ 该阈值（小时），例如 48 表示 48 小时内")
-    ap.add_argument("--hl-ask-min", type=float, default=None,
-                    help="高亮条件：卖一价下限，例如 0.96 表示 96% 起")
-    ap.add_argument("--hl-ask-max", type=float, default=None,
-                    help="高亮条件：卖一价上限，例如 0.995 表示 99.5% 封顶")
     ap.add_argument("--hl-min-total-volume", type=float, default=None,
                     help="高亮条件：总成交量下限（USDC），例如 10000 表示 ≥1 万 USDC")
     ap.add_argument("--hl-max-ask-diff", type=float, default=None,
                     help="高亮条件：单边点差 |ask-bid| 上限，例如 0.10 表示 ≤10 个点")
+
+    # 价格反转检测参数
+    ap.add_argument("--disable-reversal", action="store_true", help="关闭价格反转检测（默认开启）")
+    ap.add_argument("--rev-p1", type=float, default=None, help="反转判定：旧段最高价需低于该值（默认 0.35）")
+    ap.add_argument("--rev-p2", type=float, default=None, help="反转判定：近段最高价需高于该值（默认 0.80）")
+    ap.add_argument("--rev-window-hours", type=float, default=None, help="反转判定：近段窗口大小（小时，默认 2）")
+    ap.add_argument("--rev-lookback-days", type=float, default=None, help="反转判定：旧段回溯天数（默认 5 天）")
+    ap.add_argument("--rev-short-interval", type=str, default=None, help="短窗口预筛 interval（如 6h/1d，默认 6h）")
+    ap.add_argument("--rev-short-fidelity", type=int, default=None, help="短窗口 fidelity（分钟级，默认 15）")
+    ap.add_argument("--rev-long-fidelity", type=int, default=None, help="长窗口 fidelity（分钟级，默认 60）")
 
     ap.add_argument("--diagnose", action="store_true", help="打印诊断信息（非流式模式下打印样本）")
     ap.add_argument("--diagnose-samples", type=int, default=30, help="诊断打印的样本数上限（非流式模式）")
@@ -926,17 +1207,35 @@ def main():
     args = ap.parse_args()
 
     # 若指定了高亮参数，则覆盖全局 HIGHLIGHT_*，以便后续筛选与标签展示使用
-    global HIGHLIGHT_MAX_HOURS, HIGHLIGHT_ASK_MIN, HIGHLIGHT_ASK_MAX, HIGHLIGHT_MIN_TOTAL_VOLUME, HIGHLIGHT_MAX_ASK_DIFF
+    global HIGHLIGHT_MAX_HOURS, HIGHLIGHT_MIN_TOTAL_VOLUME, HIGHLIGHT_MAX_ASK_DIFF
     if args.hl_max_hours is not None:
         HIGHLIGHT_MAX_HOURS = args.hl_max_hours
-    if args.hl_ask_min is not None:
-        HIGHLIGHT_ASK_MIN = args.hl_ask_min
-    if args.hl_ask_max is not None:
-        HIGHLIGHT_ASK_MAX = args.hl_ask_max
     if args.hl_min_total_volume is not None:
         HIGHLIGHT_MIN_TOTAL_VOLUME = args.hl_min_total_volume
     if args.hl_max_ask_diff is not None:
         HIGHLIGHT_MAX_ASK_DIFF = args.hl_max_ask_diff
+
+    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P2, REVERSAL_WINDOW_HOURS
+    global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
+    global REVERSAL_LONG_FIDELITY
+
+    REVERSAL_ENABLED = not args.disable_reversal
+    REVERSAL_P1 = REVERSAL_P1 if args.rev_p1 is None else args.rev_p1
+    REVERSAL_P2 = REVERSAL_P2 if args.rev_p2 is None else args.rev_p2
+    REVERSAL_WINDOW_HOURS = REVERSAL_WINDOW_HOURS if args.rev_window_hours is None else args.rev_window_hours
+    REVERSAL_LOOKBACK_DAYS = REVERSAL_LOOKBACK_DAYS if args.rev_lookback_days is None else args.rev_lookback_days
+    REVERSAL_SHORT_INTERVAL = REVERSAL_SHORT_INTERVAL if args.rev_short_interval is None else args.rev_short_interval
+    REVERSAL_SHORT_FIDELITY = REVERSAL_SHORT_FIDELITY if args.rev_short_fidelity is None else args.rev_short_fidelity
+    REVERSAL_LONG_FIDELITY = REVERSAL_LONG_FIDELITY if args.rev_long_fidelity is None else args.rev_long_fidelity
+
+    rev_enable = REVERSAL_ENABLED
+    rev_p1 = REVERSAL_P1
+    rev_p2 = REVERSAL_P2
+    rev_window = REVERSAL_WINDOW_HOURS
+    rev_lookback = REVERSAL_LOOKBACK_DAYS
+    rev_short_interval = REVERSAL_SHORT_INTERVAL
+    rev_short_fidelity = REVERSAL_SHORT_FIDELITY
+    rev_long_fidelity = REVERSAL_LONG_FIDELITY
 
     # 仅抓未来盘：时间窗口 = [now + min_end_hours, now + max_end_days]
     now = _now_utc()
@@ -982,6 +1281,32 @@ def main():
                 processed += 1
 
             # 分片内批量 REST 回补
+            if rev_enable and candidates:
+                for ms in candidates:
+                    token_id = ms.yes.token_id or ms.no.token_id
+                    side = "YES" if ms.yes.token_id else "NO"
+                    try:
+                        hit, detail = detect_reversal(
+                            token_id,
+                            p1=rev_p1,
+                            p2=rev_p2,
+                            window_hours=rev_window,
+                            lookback_days=rev_lookback,
+                            short_interval=rev_short_interval,
+                            short_fidelity=rev_short_fidelity,
+                            long_fidelity=rev_long_fidelity,
+                        )
+                    except Exception as exc:
+                        hit, detail = False, {"reason": f"反转检测异常: {exc}"}
+                    ms.reversal_hit = hit
+                    ms.reversal_side = side
+                    ms.reversal_detail = detail
+            else:
+                for ms in candidates:
+                    ms.reversal_hit = True
+                    ms.reversal_side = ms.reversal_side or "YES"
+                    ms.reversal_detail = ms.reversal_detail or {"reason": "未启用反转检测"}
+
             if not args.skip_orderbook and candidates and (not args.no_rest_backfill):
                 _rest_books_backfill(
                     candidates,
@@ -1000,7 +1325,7 @@ def main():
                     _print_singleline(ms, reason2)
                 if ok2:
                     chosen_cnt += 1
-                    for snap, hours in _highlight_outcomes(ms):
+                    for snap, hours in _highlight_outcomes(ms, require_reversal=rev_enable):
                         highlights.append((ms, snap, hours))
                 processed += 1
 
@@ -1023,6 +1348,14 @@ def main():
         books_timeout=args.books_timeout,
         only=args.only,
         prefetched_markets=mkts_raw,
+        enable_reversal=rev_enable,
+        reversal_p1=rev_p1,
+        reversal_p2=rev_p2,
+        reversal_window_hours=rev_window,
+        reversal_lookback_days=rev_lookback,
+        reversal_short_interval=rev_short_interval,
+        reversal_short_fidelity=rev_short_fidelity,
+        reversal_long_fidelity=rev_long_fidelity,
     )
 
     if args.diagnose:

@@ -45,7 +45,8 @@
   - 调度与超时：`scheduler.max_concurrent_jobs`、`scheduler.poll_interval_seconds`、`scheduler.task_timeout_seconds`。
   - 路径：`paths.log_directory`、`paths.data_directory`、`paths.order_history_file`、`paths.run_state_file`。
   - 重试与监控：`retry_strategy.*` 与 `monitoring.*` 字段提供指数退避与健康检查周期的示例。
-- **筛选参数（filter_params.json）**：结束时间窗口、是否跳过订单簿、允许非流动性市场、可配置黑名单词条，以及高亮条件（`highlight.max_hours`、`highlight.ask_min`、`highlight.max_ask_diff` 等）。
+- **筛选参数（filter_params.json）**：结束时间窗口、是否跳过订单簿、允许非流动性市场、可配置黑名单词条，以及高亮条件（`highlight.max_hours`、`highlight.min_total_volume`、`highlight.max_ask_diff` 等）。
+- **价格反转检测（reversal）**：替代原先的价格区间高亮，默认启用“两段式”检测：短窗口（如 `6h` interval）触发冲高阈值 `p2=0.8`，命中后再用 5 天长窗口确认旧段最高价低于 `p1=0.35` 且近段最高价继续高于 `p2`。相关参数位于 `filter_params.json` 的 `reversal` 区段，可通过 CLI/配置开关调整。
 - **策略模板（strategy_defaults.json）**：`default` 段定义最小优势、下单量、点差目标、刷新周期等，`topics` 段可按话题 ID/名称覆盖。
 - **单市场运行参数（run_params.json）**：`market_url`、`side`、下单大小策略、跌幅/盈利阈值、倒计时配置等。
 - **交易执行参数（trading.yaml）**：下单切片区间、重试次数、价格让步步长、订单轮询频率与最小报价金额。
@@ -66,7 +67,7 @@ python Customize_fliter_blacklist.py --help
 ```bash
 python Customize_fliter_blacklist.py \
   --min-end-hours 1 --max-end-days 5 \
-  --hl-ask-min 0.8 --hl-ask-max 0.99 \
-  --hl-min-total-volume 20000 --hl-max-ask-diff 0.2
+  --hl-max-hours 48 --hl-min-total-volume 20000 --hl-max-ask-diff 0.2 \
+  --rev-p1 0.35 --rev-p2 0.8 --rev-window-hours 2 --rev-short-interval 6h
 ```
 可追加 `--stream` 查看分片流式输出或调整高亮阈值以适配不同市场环境。
