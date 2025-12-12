@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import math
+import time
 import os
 import re
 import sys
@@ -485,8 +487,14 @@ def _rest_books_backfill(
         return (max(prices) if is_bid else min(prices))
 
     for i in range(0, len(missing), batch_size):
+        batch_idx = i // batch_size + 1
+        total_batches = math.ceil(len(missing) / batch_size) if batch_size else 0
         batch = missing[i:i+batch_size]
         body = [{"token_id": tid} for tid in batch]
+        print(
+            f"[HEARTBEAT] /books 回补进度：批次 {batch_idx}/{total_batches}，token 数={len(batch)}",
+            flush=True,
+        )
         try:
             r = requests.post(url, json=body, headers=headers, timeout=timeout)
             r.raise_for_status()
@@ -605,6 +613,22 @@ def _price_points_from_history(raw: Any) -> List[Tuple[float, float]]:
     return points
 
 
+def _fetch_prices_history_once(
+    token_id: str,
+    params: Dict[str, Any],
+    *,
+    timeout: float = 10.0,
+) -> List[Tuple[float, float]]:
+    url = f"{_POLY_HOST}/prices-history"
+    try:
+        r = requests.get(url, params=params, timeout=timeout)
+        r.raise_for_status()
+        return _price_points_from_history(r.json())
+    except Exception as e:
+        print(f"[WARN] 获取价格历史失败 token={token_id} params={params}: {e}", file=sys.stderr)
+        return []
+
+
 def fetch_prices_history(
     token_id: str,
     *,
@@ -614,23 +638,40 @@ def fetch_prices_history(
     fidelity: Optional[int] = None,
     timeout: float = 10.0,
 ) -> List[Tuple[float, float]]:
-    params: Dict[str, Any] = {"market": token_id}
-    if start_ts is not None and end_ts is not None:
-        params["startTs"] = int(start_ts)
-        params["endTs"] = int(end_ts)
-    elif interval:
-        params["interval"] = interval
+    params_base: Dict[str, Any] = {"market": token_id}
+    if interval:
+        params_base["interval"] = interval
     if fidelity is not None:
-        params["fidelity"] = fidelity
+        params_base["fidelity"] = fidelity
 
-    url = f"{_POLY_HOST}/prices-history"
-    try:
-        r = requests.get(url, params=params, timeout=timeout)
-        r.raise_for_status()
-        return _price_points_from_history(r.json())
-    except Exception as e:
-        print(f"[WARN] 获取价格历史失败 token={token_id} params={params}: {e}", file=sys.stderr)
-        return []
+    # 长窗口切片抓取，避免单次请求过大被拒绝
+    if start_ts is not None and end_ts is not None:
+        slice_seconds = 7 * 86400
+        window_start = int(start_ts)
+        window_end_all = int(end_ts)
+        slice_index = 1
+        collected: List[Tuple[float, float]] = []
+
+        while window_start < window_end_all:
+            window_end = min(window_start + slice_seconds, window_end_all)
+            params = params_base | {"startTs": window_start, "endTs": window_end}
+            print(
+                f"[HEARTBEAT] 价格切片 {slice_index} / ?：token={token_id}, "
+                f"{dt.datetime.utcfromtimestamp(window_start)} -> {dt.datetime.utcfromtimestamp(window_end)}",
+                flush=True,
+            )
+            collected.extend(
+                _fetch_prices_history_once(token_id, params, timeout=timeout)
+            )
+            slice_index += 1
+            window_start = window_end
+            if window_start < window_end_all:
+                time.sleep(0.5)
+
+        return collected
+
+    # 常规请求（无起止时间）
+    return _fetch_prices_history_once(token_id, params_base, timeout=timeout)
 
 
 def _max_price_in_range(points: List[Tuple[float, float]], start_ts: float, end_ts: float) -> Optional[float]:
@@ -956,6 +997,24 @@ def _best_outcome(hits: List[Tuple[OutcomeSnapshot, float]]) -> Tuple[OutcomeSna
     return ranked[0]
 
 
+def _print_topics_summary(markets: List[MarketSnapshot], stage: str = "粗筛通过") -> None:
+    if not markets:
+        print(f"[HEARTBEAT] {stage}：当前无候选。", flush=True)
+        return
+
+    print(
+        f"[HEARTBEAT] {stage}：共 {len(markets)} 个候选，展示话题列表：",
+        flush=True,
+    )
+    max_show = 200
+    for idx, ms in enumerate(markets, start=1):
+        if idx > max_show:
+            print(f"  ... 其余 {len(markets) - max_show} 个已省略", flush=True)
+            break
+        print(f"  [{idx}] slug={ms.slug} | title={ms.title}", flush=True)
+    print("[HEARTBEAT] 粗筛列表打印完毕，准备进入下一阶段。", flush=True)
+
+
 # -------------------------------
 # 面向自动化脚本的封装
 # -------------------------------
@@ -1032,8 +1091,16 @@ def collect_filter_results(
         else:
             early_rejects.append((ms, reason))
 
+    print(
+        f"[HEARTBEAT] 初筛完成：候选 {len(market_list)} / {len(mkts_raw)}，"
+        f"被拒 {len(early_rejects)}，开始反转检测/报价回补…",
+        flush=True,
+    )
+    _print_topics_summary(market_list, stage="粗筛通过")
+
     if enable_reversal and market_list:
-        for ms in market_list:
+        total_markets = len(market_list)
+        for idx, ms in enumerate(market_list, start=1):
             token_id = ms.yes.token_id or ms.no.token_id
             side = "YES" if ms.yes.token_id else "NO"
             try:
@@ -1052,6 +1119,11 @@ def collect_filter_results(
             ms.reversal_hit = hit
             ms.reversal_side = side
             ms.reversal_detail = detail
+            if idx == 1 or idx == total_markets or idx % 50 == 0:
+                print(
+                    f"[HEARTBEAT] 反转检测进度：{idx}/{total_markets} -> {ms.slug}",
+                    flush=True,
+                )
     else:
         for ms in market_list:
             ms.reversal_hit = True
@@ -1059,6 +1131,10 @@ def collect_filter_results(
             ms.reversal_detail = ms.reversal_detail or {"reason": "未启用反转检测"}
 
     if not skip_orderbook and market_list and (not no_rest_backfill):
+        print(
+            f"[HEARTBEAT] 开始 REST /books 回补：{len(market_list)} 个市场，批次大小={books_batch_size}",
+            flush=True,
+        )
         _rest_books_backfill(
             market_list, batch_size=books_batch_size, timeout=books_timeout
         )
@@ -1260,6 +1336,7 @@ def main():
         highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, float]] = []
         for s in range(0, total, args.stream_chunk_size):
             chunk_raw = mkts_raw[s:s + args.stream_chunk_size]
+            chunk_idx = s // args.stream_chunk_size + 1
             # 解析 + 早筛（即时输出被拒绝的理由）
             candidates: List[MarketSnapshot] = []
             for raw in chunk_raw:
@@ -1279,6 +1356,12 @@ def main():
                     else:
                         _print_singleline(ms, reason)
                 processed += 1
+
+            print(
+                f"[HEARTBEAT] 流式分片 {chunk_idx} 初筛通过 {len(candidates)} / {len(chunk_raw)}，累计原始进度 {processed}/{total}",
+                flush=True,
+            )
+            _print_topics_summary(candidates, stage=f"分片 {chunk_idx} 粗筛通过")
 
             # 分片内批量 REST 回补
             if rev_enable and candidates:
