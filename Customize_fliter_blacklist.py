@@ -187,6 +187,7 @@ class FilterResult:
     chosen: List[MarketSnapshot]
     rejected: List[Tuple[MarketSnapshot, str]]
     highlights: List[HighlightedOutcome]
+    highlight_candidates_count: int = 0
     merged_event_count: int = 0
     missing_event_id_count: int = 0
 
@@ -1113,6 +1114,7 @@ def collect_filter_results(
     highlight_candidates: List[MarketSnapshot] = [
         ms for ms in market_list if _highlight_outcomes(ms, require_reversal=False)
     ]
+    highlight_candidates_count = len(highlight_candidates)
     _print_topics_summary(highlight_candidates, stage="高亮预选")
 
     if enable_reversal and highlight_candidates:
@@ -1220,6 +1222,7 @@ def collect_filter_results(
         chosen=chosen,
         rejected=rejects,
         highlights=highlights,
+        highlight_candidates_count=highlight_candidates_count,
         merged_event_count=len(event_reject_slugs),
         missing_event_id_count=missing_event_id_count,
     )
@@ -1354,6 +1357,8 @@ def main():
         total = len(mkts_raw)
         processed = 0
         chosen_cnt = 0
+        coarse_cnt = 0
+        highlight_cnt = 0
         highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, float]] = []
         for s in range(0, total, args.stream_chunk_size):
             chunk_raw = mkts_raw[s:s + args.stream_chunk_size]
@@ -1378,6 +1383,8 @@ def main():
                         _print_singleline(ms, reason)
                 processed += 1
 
+            coarse_cnt += len(candidates)
+
             print(
                 f"[HEARTBEAT] 流式分片 {chunk_idx} 初筛通过 {len(candidates)} / {len(chunk_raw)}，累计原始进度 {processed}/{total}",
                 flush=True,
@@ -1391,10 +1398,7 @@ def main():
             ]
             _print_topics_summary(highlight_candidates, stage=f"分片 {chunk_idx} 高亮预选")
 
-            highlight_candidates = [
-                ms for ms in candidates if _highlight_outcomes(ms, require_reversal=False)
-            ]
-            _print_topics_summary(highlight_candidates, stage=f"分片 {chunk_idx} 高亮预选")
+            highlight_cnt += len(highlight_candidates)
 
             # 分片内批量 REST 回补
             if rev_enable and highlight_candidates:
@@ -1447,7 +1451,10 @@ def main():
 
         print("")
         _print_highlighted(highlights)
-        print(f"\n[INFO] 通过筛选的市场数量：{chosen_cnt} / {len(mkts_raw)}")
+        print(
+            "\n[INFO] 通过筛选的市场数量（粗筛/高亮/最终）"
+            f"：{coarse_cnt} / {highlight_cnt} / {chosen_cnt}（总 {len(mkts_raw)}）"
+        )
         return
 
     # ---------- 非流式模式（批量） ----------
@@ -1498,7 +1505,11 @@ def main():
     _print_highlighted(printable_highlights)
 
     print("")
-    print(f"[INFO] 通过筛选的市场数量：{len(result.chosen)} / {result.total_markets}")
+    print(
+        "[INFO] 通过筛选的市场数量（粗筛/高亮/最终）"
+        f"：{len(result.candidates)} / {result.highlight_candidates_count} / {len(result.chosen)}"
+        f"（总 {result.total_markets}）"
+    )
     print(f"[INFO] 合并同类项数量：{result.merged_event_count}")
     print(f"[INFO] 未获取到事件ID的数量：{result.missing_event_id_count}")
 
