@@ -187,6 +187,7 @@ class FilterResult:
     chosen: List[MarketSnapshot]
     rejected: List[Tuple[MarketSnapshot, str]]
     highlights: List[HighlightedOutcome]
+    highlight_candidates_count: int = 0
     merged_event_count: int = 0
     missing_event_id_count: int = 0
 
@@ -1113,6 +1114,7 @@ def collect_filter_results(
     highlight_candidates: List[MarketSnapshot] = [
         ms for ms in market_list if _highlight_outcomes(ms, require_reversal=False)
     ]
+    highlight_candidates_count = len(highlight_candidates)
     _print_topics_summary(highlight_candidates, stage="高亮预选")
 
     if enable_reversal and highlight_candidates:
@@ -1220,6 +1222,7 @@ def collect_filter_results(
         chosen=chosen,
         rejected=rejects,
         highlights=highlights,
+        highlight_candidates_count=highlight_candidates_count,
         merged_event_count=len(event_reject_slugs),
         missing_event_id_count=missing_event_id_count,
     )
@@ -1397,11 +1400,6 @@ def main():
 
             highlight_cnt += len(highlight_candidates)
 
-            highlight_candidates = [
-                ms for ms in candidates if _highlight_outcomes(ms, require_reversal=False)
-            ]
-            _print_topics_summary(highlight_candidates, stage=f"分片 {chunk_idx} 高亮预选")
-
             # 分片内批量 REST 回补
             if rev_enable and highlight_candidates:
                 for ms in highlight_candidates:
@@ -1509,7 +1507,7 @@ def main():
     print("")
     print(
         "[INFO] 通过筛选的市场数量（粗筛/高亮/最终）"
-        f"：{len(market_list)} / {len(highlight_candidates)} / {len(result.chosen)}"
+        f"：{len(result.candidates)} / {result.highlight_candidates_count} / {len(result.chosen)}"
         f"（总 {result.total_markets}）"
     )
     print(f"[INFO] 合并同类项数量：{result.merged_event_count}")
