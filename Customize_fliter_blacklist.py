@@ -1229,6 +1229,7 @@ def collect_filter_results(
             flush=True,
         )
         total_markets = len(highlight_candidates)
+        reversal_fail_reasons: Dict[str, int] = {}
         for idx, ms in enumerate(highlight_candidates, start=1):
             token_id = ms.yes.token_id or ms.no.token_id
             side = "YES" if ms.yes.token_id else "NO"
@@ -1248,11 +1249,24 @@ def collect_filter_results(
             ms.reversal_hit = hit
             ms.reversal_side = side
             ms.reversal_detail = detail
+            reason_key = str(detail.get("reason") or "未知原因")
+            reversal_fail_reasons[reason_key] = reversal_fail_reasons.get(reason_key, 0) + (0 if hit else 1)
             if idx == 1 or idx == total_markets or idx % 50 == 0:
                 print(
                     f"[HEARTBEAT] 反转检测进度：{idx}/{total_markets} -> {ms.slug}",
                     flush=True,
                 )
+        if reversal_fail_reasons:
+            sorted_reasons = sorted(
+                reversal_fail_reasons.items(), key=lambda kv: kv[1], reverse=True
+            )
+            top_reasons = ", ".join(
+                [f"{r}={c}" for r, c in sorted_reasons[:5] if c > 0]
+            )
+            print(
+                f"[HEARTBEAT] 反转未命中原因分布（Top5）：{top_reasons or '全部命中'}",
+                flush=True,
+            )
     else:
         for ms in highlight_candidates:
             ms.reversal_hit = True
