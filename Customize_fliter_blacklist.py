@@ -534,6 +534,22 @@ def _parse_market(raw: Dict[str, Any]) -> MarketSnapshot:
         except Exception:
             pass
 
+    # 兜底填充当前价：部分 markets 接口返回 outcomePrices（不拉 /books 时用于预筛价格）
+    prices = raw.get("outcomePrices") or raw.get("outcome_prices")
+    if isinstance(prices, list) and len(prices) >= 2:
+        yp = _coerce_float(prices[0])
+        np = _coerce_float(prices[1])
+        if yp is not None:
+            if ms.yes.ask is None:
+                ms.yes.ask = yp
+            if ms.yes.bid is None:
+                ms.yes.bid = yp
+        if np is not None:
+            if ms.no.ask is None:
+                ms.no.ask = np
+            if ms.no.bid is None:
+                ms.no.bid = np
+
     return ms
 
 # -------------------------------
