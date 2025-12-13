@@ -851,8 +851,8 @@ def detect_reversal(
     short_fidelity: int = REVERSAL_SHORT_FIDELITY,
     long_fidelity: int = REVERSAL_LONG_FIDELITY,
     ) -> Tuple[bool, Dict[str, Any]]:
-        if not token_id:
-            return False, {"reason": "缺少 token_id"}
+    if not token_id:
+        return False, {"reason": "缺少 token_id"}
 
     now = _now_utc()
     now_ts = _ts_from_dt(now)
