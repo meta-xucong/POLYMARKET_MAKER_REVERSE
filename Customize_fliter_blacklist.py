@@ -61,14 +61,13 @@ REVERSAL_LOOKBACK_DAYS: float = 5.0       # 旧段回溯天数
 # 官方 /prices-history 仅支持的 interval 枚举（参考 CLOB API 文档）
 PRICES_HISTORY_INTERVALS = {
     "1m": 1 / 60.0,
-    "5m": 5 / 60.0,
-    "15m": 15 / 60.0,
     "1h": 1.0,
-    "4h": 4.0,
+    "6h": 6.0,
     "1d": 24.0,
+    "1w": 24.0 * 7,
 }
 
-REVERSAL_SHORT_INTERVAL: str = "4h"      # 短窗口 interval 触发（需落在官方允许列表内）
+REVERSAL_SHORT_INTERVAL: str = "6h"      # 短窗口 interval 触发（需落在官方允许列表内）
 REVERSAL_SHORT_FIDELITY: int = 15         # 短窗口 fidelity
 REVERSAL_LONG_FIDELITY: int = 60          # 长窗口 fidelity
 
