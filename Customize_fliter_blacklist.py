@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import math
+import random
 import time
 import os
 import re
@@ -36,6 +37,13 @@ DEFAULT_MAX_END_DAYS: int   = 2
 DEFAULT_GAMMA_WINDOW_DAYS: int = 2
 DEFAULT_GAMMA_MIN_WINDOW_HOURS: int = 1
 DEFAULT_LEGACY_END_DAYS: int  = 730
+
+# 请求速率限制与回退参数
+MAX_REQUESTS_PER_SECOND = float(os.environ.get("FILTER_MAX_RPS", "2"))
+MIN_REQUEST_INTERVAL = (
+    1.0 / MAX_REQUESTS_PER_SECOND if MAX_REQUESTS_PER_SECOND > 0 else 0.0
+)
+MAX_BACKOFF_SECONDS = float(os.environ.get("FILTER_MAX_BACKOFF", "60"))
 
 # 高亮（严格口径）集中参数
 HIGHLIGHT_MAX_HOURS: float   = 48.0
@@ -135,6 +143,65 @@ def _infer_binary_from_raw(raw: Dict[str, Any]) -> bool:
     return False
 
 # -------------------------------
+# 请求节流与重试
+# -------------------------------
+
+_last_request_time: float = 0.0
+
+
+def _respect_rate_limit() -> None:
+    """简单全局速率限制，确保请求之间至少间隔设定时间。"""
+
+    global _last_request_time
+
+    if MIN_REQUEST_INTERVAL <= 0:
+        return
+
+    now = time.monotonic()
+    elapsed = now - _last_request_time
+    if elapsed < MIN_REQUEST_INTERVAL:
+        time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+
+    _last_request_time = time.monotonic()
+
+
+def _request_with_backoff(
+    url: str,
+    *,
+    params: Optional[Dict[str, Any]] = None,
+    timeout: float = 15.0,
+    retries: int = 3,
+    backoff: float = 2.0,
+    max_backoff: float = MAX_BACKOFF_SECONDS,
+):
+    """统一封装 GET 请求：全局限速 + 指数回退 + 抖动。"""
+
+    attempt = 1
+    while True:
+        try:
+            _respect_rate_limit()
+            resp = requests.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except requests.RequestException as exc:
+            if attempt >= retries:
+                print(
+                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} -> {exc}",
+                    file=sys.stderr,
+                )
+                return None
+
+            wait = min(max_backoff, backoff * (2 ** (attempt - 1)))
+            jitter = min(wait * 0.1, 1.0)
+            sleep_for = wait + random.random() * jitter
+            print(
+                f"[WARN] 请求失败（{attempt}/{retries}）：{url} -> {exc}，{sleep_for:.1f}s 后重试…",
+                flush=True,
+            )
+            time.sleep(sleep_for)
+            attempt += 1
+
+# -------------------------------
 # 数据结构
 # -------------------------------
 
@@ -199,17 +266,19 @@ _GAMMA_HOST = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com")
 
 def _gamma_fetch(params: Dict[str, str]) -> List[Dict[str, Any]]:
     url = f"{_GAMMA_HOST}/markets"
+    resp = _request_with_backoff(url, params=params, timeout=15)
+    if resp is None:
+        return []
+
     try:
-        r = requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        data = resp.json()
         if isinstance(data, list):
             return data
         if isinstance(data, dict) and "data" in data:
             return data["data"]
-        return []
-    except Exception:
-        return []
+    except Exception as exc:
+        print(f"[WARN] Gamma 返回解析失败：{exc}", file=sys.stderr)
+    return []
 
 def fetch_markets_windowed(
     end_min: dt.datetime,
@@ -621,12 +690,23 @@ def _fetch_prices_history_once(
     timeout: float = 10.0,
 ) -> List[Tuple[float, float]]:
     url = f"{_POLY_HOST}/prices-history"
+    resp = _request_with_backoff(
+        url,
+        params=params,
+        timeout=timeout,
+        retries=4,
+        backoff=1.5,
+    )
+    if resp is None:
+        return []
+
     try:
-        r = requests.get(url, params=params, timeout=timeout)
-        r.raise_for_status()
-        return _price_points_from_history(r.json())
+        return _price_points_from_history(resp.json())
     except Exception as e:
-        print(f"[WARN] 获取价格历史失败 token={token_id} params={params}: {e}", file=sys.stderr)
+        print(
+            f"[WARN] 获取价格历史失败 token={token_id} params={params}: {e}",
+            file=sys.stderr,
+        )
         return []
 
 

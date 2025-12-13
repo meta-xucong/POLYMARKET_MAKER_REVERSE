@@ -47,6 +47,7 @@ import datetime as dt
 import json
 import re
 import os
+import random
 import time
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -54,6 +55,12 @@ from urllib.parse import urlparse
 
 GAMMA_HOST = os.environ.get("GAMMA_HOST", "https://gamma-api.polymarket.com").rstrip("/")
 CLOB_HOST = os.environ.get("CLOB_HOST", "https://clob.polymarket.com").rstrip("/")
+
+MAX_REQUESTS_PER_SECOND = float(os.environ.get("SCAN_MAX_RPS", "2"))
+MIN_REQUEST_INTERVAL = 1.0 / MAX_REQUESTS_PER_SECOND if MAX_REQUESTS_PER_SECOND > 0 else 0.0
+MAX_BACKOFF_SECONDS = float(os.environ.get("SCAN_MAX_BACKOFF", "60"))
+
+_last_request_time: float = 0.0
 
 
 @dataclass
@@ -83,12 +90,36 @@ class PricePoint:
     price_prob: float
 
 
-def _fetch_json(url: str, params: Optional[Dict] = None, *, retries: int = 3, backoff: float = 2.0) -> Dict:
+def _respect_rate_limit() -> None:
+    """Enforce a simple rate limit across all outbound HTTP requests."""
+
+    global _last_request_time
+
+    if MIN_REQUEST_INTERVAL <= 0:
+        return
+
+    now = time.monotonic()
+    elapsed = now - _last_request_time
+    if elapsed < MIN_REQUEST_INTERVAL:
+        time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+
+    _last_request_time = time.monotonic()
+
+
+def _fetch_json(
+    url: str,
+    params: Optional[Dict] = None,
+    *,
+    retries: int = 3,
+    backoff: float = 2.0,
+    max_backoff: float = MAX_BACKOFF_SECONDS,
+) -> Dict:
     import requests
 
     attempt = 1
     while True:
         try:
+            _respect_rate_limit()
             resp = requests.get(url, params=params, timeout=15)
             resp.raise_for_status()
             return resp.json()
@@ -96,12 +127,14 @@ def _fetch_json(url: str, params: Optional[Dict] = None, *, retries: int = 3, ba
             if attempt >= retries:
                 raise RuntimeError(f"请求失败：{url} -> {exc}") from exc
 
-            wait = backoff ** (attempt - 1)
+            wait = min(max_backoff, backoff * (2 ** (attempt - 1)))
+            jitter = min(wait * 0.1, 1.0)
+            sleep_for = wait + random.random() * jitter
             print(
-                f"[WARN] 请求失败（{attempt}/{retries}）：{url} -> {exc}，{wait:.1f}s 后重试…",
+                f"[WARN] 请求失败（{attempt}/{retries}）：{url} -> {exc}，{sleep_for:.1f}s 后重试…",
                 flush=True,
             )
-            time.sleep(wait)
+            time.sleep(sleep_for)
             attempt += 1
 
 
