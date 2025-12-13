@@ -1022,12 +1022,14 @@ def _highlight_outcomes(
     min_total_volume: Optional[float] = None,
     max_ask_diff: Optional[float] = None,
     require_reversal: bool = True,
+    min_price: Optional[float] = None,
 ) -> List[Tuple[OutcomeSnapshot, float]]:
     """
     高亮（严格口径）筛选条件：
     - 剩余时间 ≤ max_hours（默认 HIGHLIGHT_MAX_HOURS）
     - 总交易量 totalVolume ≥ min_total_volume（默认 HIGHLIGHT_MIN_TOTAL_VOLUME）
     - 同一 token 的点差 |ask - bid| ≤ max_ask_diff（YES 或 NO 任一满足即可；默认 HIGHLIGHT_MAX_ASK_DIFF）
+    - 当前价格需满足 min_price（若指定），用于在反转检测前预筛价格
     - 价格反转命中（默认强制）
     - 不命中黑名单
     """
@@ -1064,10 +1066,14 @@ def _highlight_outcomes(
         candidates = [ms.yes, ms.no]
 
     for snap in candidates:
+        price = _outcome_price(snap)
         spread_ok = True
         if mdiff is not None and snap.bid is not None and snap.ask is not None:
             spread_ok = abs(float(snap.ask) - float(snap.bid)) <= mdiff
-        if spread_ok:
+        price_ok = True
+        if min_price is not None:
+            price_ok = price is not None and price >= min_price
+        if spread_ok and price_ok:
             matches.append((snap, hours))
             break
     return matches
@@ -1231,8 +1237,14 @@ def collect_filter_results(
     )
     _print_topics_summary(market_list, stage="粗筛通过", show_details=False)
 
+    price_gate = reversal_p2 if enable_reversal else None
     highlight_candidates: List[MarketSnapshot] = [
-        ms for ms in market_list if _highlight_outcomes(ms, require_reversal=False)
+        ms for ms in market_list
+        if _highlight_outcomes(
+            ms,
+            require_reversal=False,
+            min_price=price_gate,
+        )
     ]
     highlight_candidates_count = len(highlight_candidates)
     _print_topics_summary(highlight_candidates, stage="高亮预选")
@@ -1311,7 +1323,11 @@ def collect_filter_results(
     highlights: List[HighlightedOutcome] = []
 
     for ms in chosen:
-        hits = _highlight_outcomes(ms, require_reversal=enable_reversal)
+        hits = _highlight_outcomes(
+            ms,
+            require_reversal=enable_reversal,
+            min_price=price_gate if enable_reversal else None,
+        )
         if not hits:
             continue
         snap, hours = _best_outcome(hits)
@@ -1493,6 +1509,7 @@ def main():
         chosen_cnt = 0
         coarse_cnt = 0
         highlight_cnt = 0
+        price_gate = rev_p2 if rev_enable else None
         highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, float]] = []
         for s in range(0, total, args.stream_chunk_size):
             chunk_raw = mkts_raw[s:s + args.stream_chunk_size]
@@ -1528,7 +1545,12 @@ def main():
             )
 
             highlight_candidates = [
-                ms for ms in candidates if _highlight_outcomes(ms, require_reversal=False)
+                ms for ms in candidates
+                if _highlight_outcomes(
+                    ms,
+                    require_reversal=False,
+                    min_price=price_gate,
+                )
             ]
             _print_topics_summary(highlight_candidates, stage=f"分片 {chunk_idx} 高亮预选")
 
@@ -1579,7 +1601,11 @@ def main():
                     _print_singleline(ms, reason2)
                 if ok2:
                     chosen_cnt += 1
-                    for snap, hours in _highlight_outcomes(ms, require_reversal=rev_enable):
+                    for snap, hours in _highlight_outcomes(
+                        ms,
+                        require_reversal=rev_enable,
+                        min_price=price_gate,
+                    ):
                         highlights.append((ms, snap, hours))
                 processed += 1
 
