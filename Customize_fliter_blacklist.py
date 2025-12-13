@@ -858,6 +858,19 @@ def _max_price_in_range(points: List[Tuple[float, float]], start_ts: float, end_
         return None
 
 
+def _ratio_below_threshold(
+    points: List[Tuple[float, float]], start_ts: float, end_ts: float, threshold: float
+) -> Optional[float]:
+    vals = [p for ts, p in points if start_ts <= ts <= end_ts]
+    if not vals:
+        return None
+    try:
+        below = sum(1 for v in vals if v < threshold)
+        return below / len(vals)
+    except Exception:
+        return None
+
+
 def detect_reversal(
     token_id: Optional[str],
     *,
@@ -911,14 +924,29 @@ def detect_reversal(
     )
 
     max_recent = _max_price_in_range(long_points, recent_start_ts, now_ts)
-    max_old = _max_price_in_range(long_points, lookback_start_ts, recent_start_ts)
+    old_points = [
+        (ts, p)
+        for ts, p in long_points
+        if lookback_start_ts <= ts <= recent_start_ts
+    ]
+    max_old = _max_price_in_range(old_points, lookback_start_ts, recent_start_ts)
+    old_below_ratio = _ratio_below_threshold(
+        old_points, lookback_start_ts, recent_start_ts, p1
+    )
 
-    hit = bool(max_recent is not None and max_recent >= p2 and max_old is not None and max_old < p1)
+    hit = bool(
+        max_recent is not None
+        and max_recent >= p2
+        and old_below_ratio is not None
+        and old_below_ratio >= 0.9
+    )
     detail = {
         "points_long": len(long_points),
         "points_short": len(short_points),
         "max_recent": max_recent,
         "max_old": max_old,
+        "old_below_ratio": old_below_ratio,
+        "old_points": len(old_points),
         "max_recent_short": max_recent_short,
         "window_hours": window_hours,
         "lookback_days": lookback_days,
@@ -926,7 +954,12 @@ def detect_reversal(
         "p2": p2,
     }
     if not hit:
-        detail["reason"] = "长窗口未满足反转"
+        if old_below_ratio is None:
+            detail["reason"] = "长窗口旧段缺少价格点"
+        elif old_below_ratio < 0.9:
+            detail["reason"] = f"旧段低于 p1 占比不足（{old_below_ratio:.3f}）"
+        else:
+            detail["reason"] = "长窗口未满足反转"
     return hit, detail
 
 # -------------------------------
@@ -1410,9 +1443,12 @@ def _print_highlighted(highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, f
         rev_status = "REV✔" if ms.reversal_hit else "REV✘"
         max_old = detail.get("max_old")
         max_recent = detail.get("max_recent") or detail.get("max_recent_short")
+        old_ratio = detail.get("old_below_ratio")
         rev_desc_parts = [rev_status]
         if max_old is not None:
             rev_desc_parts.append(f"old_max={max_old:.3f}")
+        if old_ratio is not None:
+            rev_desc_parts.append(f"old<p1%={old_ratio:.3f}")
         if max_recent is not None:
             rev_desc_parts.append(f"recent_max={max_recent:.3f}")
         if detail.get("reason"):
