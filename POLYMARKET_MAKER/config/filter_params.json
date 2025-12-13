@@ -1,6 +1,6 @@
 {
-  "min_end_hours": 5.0,
-  "max_end_days": 2,
+  "min_end_hours": 1.0,
+  "max_end_days": 5,
   "gamma_window_days": 2,
   "gamma_min_window_hours": 1,
   "legacy_end_days": 730,
@@ -66,13 +66,13 @@
   "highlight": {
     "max_hours": 48,
     "min_total_volume": 10000,
-    "max_ask_diff": 0.2
+    "max_ask_diff": 0.5
   },
   "reversal": {
     "enabled": true,
-    "p1": 0.35,
+    "p1": 0.45,
     "p2": 0.8,
-    "window_hours": 2,
+    "window_hours": 6,
     "lookback_days": 5,
     "short_interval": "4h",
     "short_fidelity": 15,
