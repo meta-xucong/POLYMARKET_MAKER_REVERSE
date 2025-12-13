@@ -193,10 +193,27 @@ def _request_with_backoff(
             resp = requests.get(url, params=params, timeout=timeout)
             resp.raise_for_status()
             return resp
-        except requests.RequestException as exc:
-            if attempt >= retries:
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            body = None
+            try:
+                if exc.response is not None:
+                    body = exc.response.text
+            except Exception:
+                pass
+
+            if status is not None and 400 <= status < 500 and status != 429:
+                extra = f" | body={body[:200]}" if body else ""
                 print(
-                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} -> {exc}",
+                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}{extra}",
+                    file=sys.stderr,
+                )
+                return None
+
+            if attempt >= retries:
+                extra = f" | body={body[:200]}" if body else ""
+                print(
+                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}{extra}",
                     file=sys.stderr,
                 )
                 return None
@@ -205,7 +222,24 @@ def _request_with_backoff(
             jitter = min(wait * 0.1, 1.0)
             sleep_for = wait + random.random() * jitter
             print(
-                f"[WARN] 请求失败（{attempt}/{retries}）：{url} -> {exc}，{sleep_for:.1f}s 后重试…",
+                f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}，{sleep_for:.1f}s 后重试…",
+                flush=True,
+            )
+            time.sleep(sleep_for)
+            attempt += 1
+        except requests.RequestException as exc:
+            if attempt >= retries:
+                print(
+                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}",
+                    file=sys.stderr,
+                )
+                return None
+
+            wait = min(max_backoff, backoff * (2 ** (attempt - 1)))
+            jitter = min(wait * 0.1, 1.0)
+            sleep_for = wait + random.random() * jitter
+            print(
+                f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}，{sleep_for:.1f}s 后重试…",
                 flush=True,
             )
             time.sleep(sleep_for)
@@ -816,9 +850,9 @@ def detect_reversal(
     short_interval: str = REVERSAL_SHORT_INTERVAL,
     short_fidelity: int = REVERSAL_SHORT_FIDELITY,
     long_fidelity: int = REVERSAL_LONG_FIDELITY,
-) -> Tuple[bool, Dict[str, Any]]:
-    if not token_id:
-        return False, {"reason": "缺少 token_id"}
+    ) -> Tuple[bool, Dict[str, Any]]:
+        if not token_id:
+            return False, {"reason": "缺少 token_id"}
 
     now = _now_utc()
     now_ts = _ts_from_dt(now)
@@ -829,6 +863,8 @@ def detect_reversal(
         token_id,
         interval=short_interval,
         fidelity=short_fidelity,
+        start_ts=recent_start_ts,
+        end_ts=now_ts,
     )
     max_recent_short = _max_price_in_range(short_points, recent_start_ts, now_ts)
     if max_recent_short is None or max_recent_short < p2:
