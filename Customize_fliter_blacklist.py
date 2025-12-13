@@ -71,6 +71,9 @@ REVERSAL_SHORT_INTERVAL: str = "6h"      # 短窗口 interval 触发（需落在
 REVERSAL_SHORT_FIDELITY: int = 15         # 短窗口 fidelity
 REVERSAL_LONG_FIDELITY: int = 60          # 长窗口 fidelity
 
+# 诊断频率限制
+_last_short_miss_log: float = 0.0
+
 
 # -------------------------------
 # 小工具
@@ -692,7 +695,7 @@ def _extract_price(value: Any) -> Optional[float]:
 def _price_points_from_history(raw: Any) -> List[Tuple[float, float]]:
     data = raw
     if isinstance(raw, dict):
-        for key in ("prices", "data", "items", "result"):
+        for key in ("prices", "data", "items", "result", "history"):
             if isinstance(raw.get(key), list):
                 data = raw.get(key)
                 break
@@ -794,8 +797,6 @@ def fetch_prices_history(
     params_base: Dict[str, Any] = {"market": token_id}
 
     normalized_interval = _normalize_interval(interval)
-    if normalized_interval:
-        params_base["interval"] = normalized_interval
     if fidelity is not None:
         params_base["fidelity"] = fidelity
 
@@ -826,6 +827,8 @@ def fetch_prices_history(
         return collected
 
     # 常规请求（无起止时间）
+    if normalized_interval:
+        params_base = {**params_base, "interval": normalized_interval}
     return _fetch_prices_history_once(token_id, params_base, timeout=timeout)
 
 
@@ -867,10 +870,21 @@ def detect_reversal(
     )
     max_recent_short = _max_price_in_range(short_points, recent_start_ts, now_ts)
     if max_recent_short is None or max_recent_short < p2:
+        global _last_short_miss_log
+        now_mono = time.monotonic()
+        if now_mono - _last_short_miss_log >= 30:
+            last_price = short_points[-1][1] if short_points else None
+            print(
+                f"[TRACE] 短窗口未触发：token={token_id} points_short={len(short_points)} "
+                f"max_recent_short={max_recent_short} last_price_short={last_price}",
+                file=sys.stderr,
+            )
+            _last_short_miss_log = now_mono
         return False, {
             "reason": "短窗口未触发",
             "max_recent_short": max_recent_short,
             "points_short": len(short_points),
+            "last_price_short": short_points[-1][1] if short_points else None,
         }
 
     long_points = fetch_prices_history(
@@ -1008,12 +1022,14 @@ def _highlight_outcomes(
     min_total_volume: Optional[float] = None,
     max_ask_diff: Optional[float] = None,
     require_reversal: bool = True,
+    min_price: Optional[float] = None,
 ) -> List[Tuple[OutcomeSnapshot, float]]:
     """
     高亮（严格口径）筛选条件：
     - 剩余时间 ≤ max_hours（默认 HIGHLIGHT_MAX_HOURS）
     - 总交易量 totalVolume ≥ min_total_volume（默认 HIGHLIGHT_MIN_TOTAL_VOLUME）
     - 同一 token 的点差 |ask - bid| ≤ max_ask_diff（YES 或 NO 任一满足即可；默认 HIGHLIGHT_MAX_ASK_DIFF）
+    - 当前价格需满足 min_price（若指定），用于在反转检测前预筛价格
     - 价格反转命中（默认强制）
     - 不命中黑名单
     """
@@ -1050,10 +1066,14 @@ def _highlight_outcomes(
         candidates = [ms.yes, ms.no]
 
     for snap in candidates:
+        price = _outcome_price(snap)
         spread_ok = True
         if mdiff is not None and snap.bid is not None and snap.ask is not None:
             spread_ok = abs(float(snap.ask) - float(snap.bid)) <= mdiff
-        if spread_ok:
+        price_ok = True
+        if min_price is not None:
+            price_ok = price is not None and price >= min_price
+        if spread_ok and price_ok:
             matches.append((snap, hours))
             break
     return matches
@@ -1217,8 +1237,14 @@ def collect_filter_results(
     )
     _print_topics_summary(market_list, stage="粗筛通过", show_details=False)
 
+    price_gate = reversal_p2 if enable_reversal else None
     highlight_candidates: List[MarketSnapshot] = [
-        ms for ms in market_list if _highlight_outcomes(ms, require_reversal=False)
+        ms for ms in market_list
+        if _highlight_outcomes(
+            ms,
+            require_reversal=False,
+            min_price=price_gate,
+        )
     ]
     highlight_candidates_count = len(highlight_candidates)
     _print_topics_summary(highlight_candidates, stage="高亮预选")
@@ -1297,7 +1323,11 @@ def collect_filter_results(
     highlights: List[HighlightedOutcome] = []
 
     for ms in chosen:
-        hits = _highlight_outcomes(ms, require_reversal=enable_reversal)
+        hits = _highlight_outcomes(
+            ms,
+            require_reversal=enable_reversal,
+            min_price=price_gate if enable_reversal else None,
+        )
         if not hits:
             continue
         snap, hours = _best_outcome(hits)
@@ -1479,6 +1509,7 @@ def main():
         chosen_cnt = 0
         coarse_cnt = 0
         highlight_cnt = 0
+        price_gate = rev_p2 if rev_enable else None
         highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, float]] = []
         for s in range(0, total, args.stream_chunk_size):
             chunk_raw = mkts_raw[s:s + args.stream_chunk_size]
@@ -1514,7 +1545,12 @@ def main():
             )
 
             highlight_candidates = [
-                ms for ms in candidates if _highlight_outcomes(ms, require_reversal=False)
+                ms for ms in candidates
+                if _highlight_outcomes(
+                    ms,
+                    require_reversal=False,
+                    min_price=price_gate,
+                )
             ]
             _print_topics_summary(highlight_candidates, stage=f"分片 {chunk_idx} 高亮预选")
 
@@ -1565,7 +1601,11 @@ def main():
                     _print_singleline(ms, reason2)
                 if ok2:
                     chosen_cnt += 1
-                    for snap, hours in _highlight_outcomes(ms, require_reversal=rev_enable):
+                    for snap, hours in _highlight_outcomes(
+                        ms,
+                        require_reversal=rev_enable,
+                        min_price=price_gate,
+                    ):
                         highlights.append((ms, snap, hours))
                 processed += 1
 
