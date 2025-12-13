@@ -1259,7 +1259,9 @@ def collect_filter_results(
         if _highlight_outcomes(
             ms,
             require_reversal=False,
-            min_price=price_gate,
+            # 预选阶段不做价格门槛：Gamma 的 outcomePrices 可能缺失，
+            # 价格回补要等 /books 完成后再在终筛环节使用 price_gate。
+            min_price=None,
         )
     ]
     highlight_candidates_count = len(highlight_candidates)
