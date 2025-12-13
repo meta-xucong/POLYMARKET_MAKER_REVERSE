@@ -71,6 +71,9 @@ REVERSAL_SHORT_INTERVAL: str = "6h"      # 短窗口 interval 触发（需落在
 REVERSAL_SHORT_FIDELITY: int = 15         # 短窗口 fidelity
 REVERSAL_LONG_FIDELITY: int = 60          # 长窗口 fidelity
 
+# 诊断频率限制
+_last_short_miss_log: float = 0.0
+
 
 # -------------------------------
 # 小工具
@@ -692,7 +695,7 @@ def _extract_price(value: Any) -> Optional[float]:
 def _price_points_from_history(raw: Any) -> List[Tuple[float, float]]:
     data = raw
     if isinstance(raw, dict):
-        for key in ("prices", "data", "items", "result"):
+        for key in ("prices", "data", "items", "result", "history"):
             if isinstance(raw.get(key), list):
                 data = raw.get(key)
                 break
@@ -794,8 +797,6 @@ def fetch_prices_history(
     params_base: Dict[str, Any] = {"market": token_id}
 
     normalized_interval = _normalize_interval(interval)
-    if normalized_interval:
-        params_base["interval"] = normalized_interval
     if fidelity is not None:
         params_base["fidelity"] = fidelity
 
@@ -826,6 +827,8 @@ def fetch_prices_history(
         return collected
 
     # 常规请求（无起止时间）
+    if normalized_interval:
+        params_base = {**params_base, "interval": normalized_interval}
     return _fetch_prices_history_once(token_id, params_base, timeout=timeout)
 
 
@@ -867,10 +870,21 @@ def detect_reversal(
     )
     max_recent_short = _max_price_in_range(short_points, recent_start_ts, now_ts)
     if max_recent_short is None or max_recent_short < p2:
+        global _last_short_miss_log
+        now_mono = time.monotonic()
+        if now_mono - _last_short_miss_log >= 30:
+            last_price = short_points[-1][1] if short_points else None
+            print(
+                f"[TRACE] 短窗口未触发：token={token_id} points_short={len(short_points)} "
+                f"max_recent_short={max_recent_short} last_price_short={last_price}",
+                file=sys.stderr,
+            )
+            _last_short_miss_log = now_mono
         return False, {
             "reason": "短窗口未触发",
             "max_recent_short": max_recent_short,
             "points_short": len(short_points),
+            "last_price_short": short_points[-1][1] if short_points else None,
         }
 
     long_points = fetch_prices_history(
