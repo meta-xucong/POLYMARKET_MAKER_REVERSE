@@ -58,7 +58,17 @@ REVERSAL_P1: float = 0.35                 # 旧段最高价上限
 REVERSAL_P2: float = 0.80                 # 近段最高价下限
 REVERSAL_WINDOW_HOURS: float = 2.0        # 近段窗口（小时）
 REVERSAL_LOOKBACK_DAYS: float = 5.0       # 旧段回溯天数
-REVERSAL_SHORT_INTERVAL: str = "6h"      # 短窗口 interval 触发
+# 官方 /prices-history 仅支持的 interval 枚举（参考 CLOB API 文档）
+PRICES_HISTORY_INTERVALS = {
+    "1m": 1 / 60.0,
+    "5m": 5 / 60.0,
+    "15m": 15 / 60.0,
+    "1h": 1.0,
+    "4h": 4.0,
+    "1d": 24.0,
+}
+
+REVERSAL_SHORT_INTERVAL: str = "4h"      # 短窗口 interval 触发（需落在官方允许列表内）
 REVERSAL_SHORT_FIDELITY: int = 15         # 短窗口 fidelity
 REVERSAL_LONG_FIDELITY: int = 60          # 长窗口 fidelity
 
@@ -183,10 +193,27 @@ def _request_with_backoff(
             resp = requests.get(url, params=params, timeout=timeout)
             resp.raise_for_status()
             return resp
-        except requests.RequestException as exc:
-            if attempt >= retries:
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            body = None
+            try:
+                if exc.response is not None:
+                    body = exc.response.text
+            except Exception:
+                pass
+
+            if status is not None and 400 <= status < 500 and status != 429:
+                extra = f" | body={body[:200]}" if body else ""
                 print(
-                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} -> {exc}",
+                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}{extra}",
+                    file=sys.stderr,
+                )
+                return None
+
+            if attempt >= retries:
+                extra = f" | body={body[:200]}" if body else ""
+                print(
+                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}{extra}",
                     file=sys.stderr,
                 )
                 return None
@@ -195,7 +222,24 @@ def _request_with_backoff(
             jitter = min(wait * 0.1, 1.0)
             sleep_for = wait + random.random() * jitter
             print(
-                f"[WARN] 请求失败（{attempt}/{retries}）：{url} -> {exc}，{sleep_for:.1f}s 后重试…",
+                f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}，{sleep_for:.1f}s 后重试…",
+                flush=True,
+            )
+            time.sleep(sleep_for)
+            attempt += 1
+        except requests.RequestException as exc:
+            if attempt >= retries:
+                print(
+                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}",
+                    file=sys.stderr,
+                )
+                return None
+
+            wait = min(max_backoff, backoff * (2 ** (attempt - 1)))
+            jitter = min(wait * 0.1, 1.0)
+            sleep_for = wait + random.random() * jitter
+            print(
+                f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}，{sleep_for:.1f}s 后重试…",
                 flush=True,
             )
             time.sleep(sleep_for)
@@ -683,6 +727,35 @@ def _price_points_from_history(raw: Any) -> List[Tuple[float, float]]:
     return points
 
 
+def _normalize_interval(interval: Optional[str]) -> Optional[str]:
+    if interval is None:
+        return None
+
+    s = str(interval).strip().lower()
+    if s in PRICES_HISTORY_INTERVALS:
+        return s
+
+    m = re.match(r"^(?P<num>\d+(?:\.\d+)?)(?P<unit>[mh])$", s)
+    if m:
+        num = float(m.group("num"))
+        hours = num if m.group("unit") == "h" else num / 60.0
+        best = min(
+            PRICES_HISTORY_INTERVALS.items(),
+            key=lambda kv: abs(kv[1] - hours),
+        )[0]
+        print(
+            f"[WARN] interval={interval} 不在官方支持列表，已自动回退为 {best}",
+            file=sys.stderr,
+        )
+        return best
+
+    print(
+        f"[WARN] interval={interval} 无效，已忽略（使用默认）",
+        file=sys.stderr,
+    )
+    return None
+
+
 def _fetch_prices_history_once(
     token_id: str,
     params: Dict[str, Any],
@@ -720,8 +793,10 @@ def fetch_prices_history(
     timeout: float = 10.0,
 ) -> List[Tuple[float, float]]:
     params_base: Dict[str, Any] = {"market": token_id}
-    if interval:
-        params_base["interval"] = interval
+
+    normalized_interval = _normalize_interval(interval)
+    if normalized_interval:
+        params_base["interval"] = normalized_interval
     if fidelity is not None:
         params_base["fidelity"] = fidelity
 
@@ -775,7 +850,7 @@ def detect_reversal(
     short_interval: str = REVERSAL_SHORT_INTERVAL,
     short_fidelity: int = REVERSAL_SHORT_FIDELITY,
     long_fidelity: int = REVERSAL_LONG_FIDELITY,
-) -> Tuple[bool, Dict[str, Any]]:
+    ) -> Tuple[bool, Dict[str, Any]]:
     if not token_id:
         return False, {"reason": "缺少 token_id"}
 
@@ -788,6 +863,8 @@ def detect_reversal(
         token_id,
         interval=short_interval,
         fidelity=short_fidelity,
+        start_ts=recent_start_ts,
+        end_ts=now_ts,
     )
     max_recent_short = _max_price_in_range(short_points, recent_start_ts, now_ts)
     if max_recent_short is None or max_recent_short < p2:
