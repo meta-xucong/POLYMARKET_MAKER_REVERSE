@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import math
 import random
 import time
@@ -18,6 +19,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
@@ -70,6 +72,9 @@ PRICES_HISTORY_INTERVALS = {
 REVERSAL_SHORT_INTERVAL: str = "6h"      # 短窗口 interval 触发（需落在官方允许列表内）
 REVERSAL_SHORT_FIDELITY: int = 15         # 短窗口 fidelity
 REVERSAL_LONG_FIDELITY: int = 60          # 长窗口 fidelity
+
+# 默认筛选配置文件路径（用于覆写上述默认值）
+FILTER_PARAMS_PATH = Path(__file__).resolve().parent / "POLYMARKET_MAKER" / "config" / "filter_params.json"
 
 # 诊断频率限制
 _last_short_miss_log: float = 0.0
@@ -153,6 +158,17 @@ def _infer_binary_from_raw(raw: Dict[str, Any]) -> bool:
         if isinstance(bv, str) and bv.lower() in ("true","yes","y","1"):
             return True
     return False
+
+
+def _load_filter_params(path: Path) -> Dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
 
 # -------------------------------
 # 请求节流与重试
@@ -1466,47 +1482,105 @@ def _print_highlighted(highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, f
 # -------------------------------
 
 def main():
+    filter_params_raw = _load_filter_params(FILTER_PARAMS_PATH)
+    highlight_defaults = (
+        filter_params_raw.get("highlight")
+        if isinstance(filter_params_raw.get("highlight"), dict)
+        else {}
+    )
+    reversal_defaults = (
+        filter_params_raw.get("reversal")
+        if isinstance(filter_params_raw.get("reversal"), dict)
+        else {}
+    )
+
+    default_min_end_hours = float(filter_params_raw.get("min_end_hours", DEFAULT_MIN_END_HOURS))
+    default_max_end_days = int(filter_params_raw.get("max_end_days", DEFAULT_MAX_END_DAYS))
+    default_gamma_window_days = int(filter_params_raw.get("gamma_window_days", DEFAULT_GAMMA_WINDOW_DAYS))
+    default_gamma_min_window_hours = int(filter_params_raw.get("gamma_min_window_hours", DEFAULT_GAMMA_MIN_WINDOW_HOURS))
+    default_legacy_end_days = int(filter_params_raw.get("legacy_end_days", DEFAULT_LEGACY_END_DAYS))
+    default_allow_illiquid = bool(filter_params_raw.get("allow_illiquid", False))
+    default_skip_orderbook = bool(filter_params_raw.get("skip_orderbook", False))
+    default_no_rest_backfill = bool(filter_params_raw.get("no_rest_backfill", False))
+    default_books_batch_size = int(filter_params_raw.get("books_batch_size", 200))
+    default_books_timeout = float(filter_params_raw.get("books_timeout_sec", 10.0))
+    default_only = str(filter_params_raw.get("only", ""))
+
+    default_hl_max_hours = highlight_defaults.get("max_hours")
+    default_hl_min_total_volume = highlight_defaults.get("min_total_volume")
+    default_hl_max_ask_diff = highlight_defaults.get("max_ask_diff")
+
+    default_rev_enabled = bool(reversal_defaults.get("enabled", REVERSAL_ENABLED))
+    default_rev_p1 = float(reversal_defaults.get("p1", REVERSAL_P1))
+    default_rev_p2 = float(reversal_defaults.get("p2", REVERSAL_P2))
+    default_rev_window = float(reversal_defaults.get("window_hours", REVERSAL_WINDOW_HOURS))
+    default_rev_lookback = float(reversal_defaults.get("lookback_days", REVERSAL_LOOKBACK_DAYS))
+    default_rev_short_interval = str(reversal_defaults.get("short_interval", REVERSAL_SHORT_INTERVAL))
+    default_rev_short_fidelity = int(reversal_defaults.get("short_fidelity", REVERSAL_SHORT_FIDELITY))
+    default_rev_long_fidelity = int(reversal_defaults.get("long_fidelity", REVERSAL_LONG_FIDELITY))
+
+    global HIGHLIGHT_MAX_HOURS, HIGHLIGHT_MIN_TOTAL_VOLUME, HIGHLIGHT_MAX_ASK_DIFF
+    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P2, REVERSAL_WINDOW_HOURS
+    global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
+    global REVERSAL_LONG_FIDELITY
+
+    if default_hl_max_hours is not None:
+        HIGHLIGHT_MAX_HOURS = float(default_hl_max_hours)
+    if default_hl_min_total_volume is not None:
+        HIGHLIGHT_MIN_TOTAL_VOLUME = float(default_hl_min_total_volume)
+    if default_hl_max_ask_diff is not None:
+        HIGHLIGHT_MAX_ASK_DIFF = float(default_hl_max_ask_diff)
+
+    REVERSAL_ENABLED = default_rev_enabled
+    REVERSAL_P1 = default_rev_p1
+    REVERSAL_P2 = default_rev_p2
+    REVERSAL_WINDOW_HOURS = default_rev_window
+    REVERSAL_LOOKBACK_DAYS = default_rev_lookback
+    REVERSAL_SHORT_INTERVAL = default_rev_short_interval
+    REVERSAL_SHORT_FIDELITY = default_rev_short_fidelity
+    REVERSAL_LONG_FIDELITY = default_rev_long_fidelity
+
     ap = argparse.ArgumentParser(description="Polymarket 市场筛选（REST-only：/books 批量回补买一/卖一）")
-    ap.add_argument("--books-batch-size", type=int, default=200, help="REST /books 批量回补的 token_id 数量上限（非流式模式）")
-    ap.add_argument("--books-timeout", type=float, default=10.0, help="REST /books 回补单次请求超时时间（秒，非流式模式）")
-    ap.add_argument("--no_rest_backfill", dest="no_rest_backfill", action="store_true", help="关闭 REST 回补（诊断用，默认开启）")
-    ap.add_argument("--skip-orderbook", action="store_true", help="跳过任何订单簿/价格回补（仅诊断）")
-    ap.add_argument("--allow-illiquid", action="store_true", help="允许无报价市场通过（仅诊断）")
+    ap.add_argument("--books-batch-size", type=int, default=default_books_batch_size, help="REST /books 批量回补的 token_id 数量上限（非流式模式）")
+    ap.add_argument("--books-timeout", type=float, default=default_books_timeout, help="REST /books 回补单次请求超时时间（秒，非流式模式）")
+    ap.add_argument("--no_rest_backfill", dest="no_rest_backfill", action="store_true", default=default_no_rest_backfill, help="关闭 REST 回补（诊断用，默认开启）")
+    ap.add_argument("--skip-orderbook", action="store_true", default=default_skip_orderbook, help="跳过任何订单簿/价格回补（仅诊断）")
+    ap.add_argument("--allow-illiquid", action="store_true", default=default_allow_illiquid, help="允许无报价市场通过（仅诊断）")
 
-    ap.add_argument("--min-end-hours", type=float, default=DEFAULT_MIN_END_HOURS, help="仅抓取结束时间晚于该阈值（小时）的市场")
-    ap.add_argument("--max-end-days", type=int, default=DEFAULT_MAX_END_DAYS, help="仅抓取结束时间在未来 N 天内的市场")
-    ap.add_argument("--gamma-window-days", type=int, default=DEFAULT_GAMMA_WINDOW_DAYS, help="Gamma 时间切片的窗口大小（天），命中 500 会自动递归切分")
-    ap.add_argument("--gamma-min-window-hours", type=int, default=DEFAULT_GAMMA_MIN_WINDOW_HOURS, help="Gamma 时间切片命中 500 时递归拆分的最小窗口（小时）；窗口缩到该级别仍满额会按 endDate 继续分页")
+    ap.add_argument("--min-end-hours", type=float, default=default_min_end_hours, help="仅抓取结束时间晚于该阈值（小时）的市场")
+    ap.add_argument("--max-end-days", type=int, default=default_max_end_days, help="仅抓取结束时间在未来 N 天内的市场")
+    ap.add_argument("--gamma-window-days", type=int, default=default_gamma_window_days, help="Gamma 时间切片的窗口大小（天），命中 500 会自动递归切分")
+    ap.add_argument("--gamma-min-window-hours", type=int, default=default_gamma_min_window_hours, help="Gamma 时间切片命中 500 时递归拆分的最小窗口（小时）；窗口缩到该级别仍满额会按 endDate 继续分页")
 
-    ap.add_argument("--legacy-end-days", type=int, default=DEFAULT_LEGACY_END_DAYS, help="结束早于 N 天视为旧格式/归档（默认 730 天）")
+    ap.add_argument("--legacy-end-days", type=int, default=default_legacy_end_days, help="结束早于 N 天视为旧格式/归档（默认 730 天）")
 
     # 高亮（严格口径）参数：不指定时使用脚本顶部的 HIGHLIGHT_* 默认值
-    ap.add_argument("--hl-max-hours", type=float, default=None,
+    ap.add_argument("--hl-max-hours", type=float, default=default_hl_max_hours,
                     help="高亮条件：剩余时间 ≤ 该阈值（小时），例如 48 表示 48 小时内")
-    ap.add_argument("--hl-min-total-volume", type=float, default=None,
+    ap.add_argument("--hl-min-total-volume", type=float, default=default_hl_min_total_volume,
                     help="高亮条件：总成交量下限（USDC），例如 10000 表示 ≥1 万 USDC")
-    ap.add_argument("--hl-max-ask-diff", type=float, default=None,
+    ap.add_argument("--hl-max-ask-diff", type=float, default=default_hl_max_ask_diff,
                     help="高亮条件：单边点差 |ask-bid| 上限，例如 0.10 表示 ≤10 个点")
 
     # 价格反转检测参数
     ap.add_argument("--disable-reversal", action="store_true", help="关闭价格反转检测（默认开启）")
-    ap.add_argument("--rev-p1", type=float, default=None, help="反转判定：旧段最高价需低于该值（默认 0.35）")
-    ap.add_argument("--rev-p2", type=float, default=None, help="反转判定：近段最高价需高于该值（默认 0.80）")
-    ap.add_argument("--rev-window-hours", type=float, default=None, help="反转判定：近段窗口大小（小时，默认 2）")
-    ap.add_argument("--rev-lookback-days", type=float, default=None, help="反转判定：旧段回溯天数（默认 5 天）")
-    ap.add_argument("--rev-short-interval", type=str, default=None, help="短窗口预筛 interval（如 6h/1d，默认 6h）")
-    ap.add_argument("--rev-short-fidelity", type=int, default=None, help="短窗口 fidelity（分钟级，默认 15）")
-    ap.add_argument("--rev-long-fidelity", type=int, default=None, help="长窗口 fidelity（分钟级，默认 60）")
+    ap.add_argument("--rev-p1", type=float, default=default_rev_p1, help="反转判定：旧段最高价需低于该值（默认 0.35）")
+    ap.add_argument("--rev-p2", type=float, default=default_rev_p2, help="反转判定：近段最高价需高于该值（默认 0.80）")
+    ap.add_argument("--rev-window-hours", type=float, default=default_rev_window, help="反转判定：近段窗口大小（小时，默认 2）")
+    ap.add_argument("--rev-lookback-days", type=float, default=default_rev_lookback, help="反转判定：旧段回溯天数（默认 5 天）")
+    ap.add_argument("--rev-short-interval", type=str, default=default_rev_short_interval, help="短窗口预筛 interval（如 6h/1d，默认 6h）")
+    ap.add_argument("--rev-short-fidelity", type=int, default=default_rev_short_fidelity, help="短窗口 fidelity（分钟级，默认 15）")
+    ap.add_argument("--rev-long-fidelity", type=int, default=default_rev_long_fidelity, help="长窗口 fidelity（分钟级，默认 60）")
 
     ap.add_argument("--diagnose", action="store_true", help="打印诊断信息（非流式模式下打印样本）")
     ap.add_argument("--diagnose-samples", type=int, default=30, help="诊断打印的样本数上限（非流式模式）")
-    ap.add_argument("--only", type=str, default="", help="仅处理包含该子串的 slug/title（大小写不敏感）")
+    ap.add_argument("--only", type=str, default=default_only, help="仅处理包含该子串的 slug/title（大小写不敏感）")
 
     # 流式输出选项
     ap.add_argument("--stream", action="store_true", help="启用流式逐个输出（按分片处理）")
     ap.add_argument("--stream-chunk-size", type=int, default=200, help="流式：每个分片的市场数量")
-    ap.add_argument("--stream-books-batch-size", type=int, default=200, help="流式：每个分片内 REST /books 批量回补的 token_id 数量上限")
-    ap.add_argument("--stream-books-timeout", type=float, default=10.0, help="流式：REST /books 回补单次请求超时时间（秒）")
+    ap.add_argument("--stream-books-batch-size", type=int, default=default_books_batch_size, help="流式：每个分片内 REST /books 批量回补的 token_id 数量上限")
+    ap.add_argument("--stream-books-timeout", type=float, default=default_books_timeout, help="流式：REST /books 回补单次请求超时时间（秒）")
     ap.add_argument("--stream-verbose", action="store_true", help="流式：逐个输出详细块（默认仅单行）")
     args = ap.parse_args()
 
@@ -1523,14 +1597,14 @@ def main():
     global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
     global REVERSAL_LONG_FIDELITY
 
-    REVERSAL_ENABLED = not args.disable_reversal
-    REVERSAL_P1 = REVERSAL_P1 if args.rev_p1 is None else args.rev_p1
-    REVERSAL_P2 = REVERSAL_P2 if args.rev_p2 is None else args.rev_p2
-    REVERSAL_WINDOW_HOURS = REVERSAL_WINDOW_HOURS if args.rev_window_hours is None else args.rev_window_hours
-    REVERSAL_LOOKBACK_DAYS = REVERSAL_LOOKBACK_DAYS if args.rev_lookback_days is None else args.rev_lookback_days
-    REVERSAL_SHORT_INTERVAL = REVERSAL_SHORT_INTERVAL if args.rev_short_interval is None else args.rev_short_interval
-    REVERSAL_SHORT_FIDELITY = REVERSAL_SHORT_FIDELITY if args.rev_short_fidelity is None else args.rev_short_fidelity
-    REVERSAL_LONG_FIDELITY = REVERSAL_LONG_FIDELITY if args.rev_long_fidelity is None else args.rev_long_fidelity
+    REVERSAL_ENABLED = default_rev_enabled and (not args.disable_reversal)
+    REVERSAL_P1 = args.rev_p1
+    REVERSAL_P2 = args.rev_p2
+    REVERSAL_WINDOW_HOURS = args.rev_window_hours
+    REVERSAL_LOOKBACK_DAYS = args.rev_lookback_days
+    REVERSAL_SHORT_INTERVAL = args.rev_short_interval
+    REVERSAL_SHORT_FIDELITY = args.rev_short_fidelity
+    REVERSAL_LONG_FIDELITY = args.rev_long_fidelity
 
     rev_enable = REVERSAL_ENABLED
     rev_p1 = REVERSAL_P1
