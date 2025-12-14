@@ -295,9 +295,9 @@ class GlobalConfig:
 
 @dataclass
 class HighlightConfig:
-    max_hours: Optional[float] = 72.0
-    min_total_volume: Optional[float] = 20000.0
-    max_ask_diff: Optional[float] = 0.2
+    max_hours: Optional[float] = filter_script.HIGHLIGHT_MAX_HOURS
+    min_total_volume: Optional[float] = filter_script.HIGHLIGHT_MIN_TOTAL_VOLUME
+    max_ask_diff: Optional[float] = filter_script.HIGHLIGHT_MAX_ASK_DIFF
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "HighlightConfig":
@@ -375,15 +375,15 @@ class ReversalConfig:
 @dataclass
 class FilterConfig:
     min_end_hours: float = filter_script.DEFAULT_MIN_END_HOURS
-    max_end_days: int = 5
-    gamma_window_days: int = 2
-    gamma_min_window_hours: int = 1
+    max_end_days: int = filter_script.DEFAULT_MAX_END_DAYS
+    gamma_window_days: int = filter_script.DEFAULT_GAMMA_WINDOW_DAYS
+    gamma_min_window_hours: int = filter_script.DEFAULT_GAMMA_MIN_WINDOW_HOURS
     legacy_end_days: int = filter_script.DEFAULT_LEGACY_END_DAYS
     allow_illiquid: bool = False
     skip_orderbook: bool = False
     no_rest_backfill: bool = False
     books_batch_size: int = 200
-    books_timeout_sec: float = 5.0
+    books_timeout_sec: float = 10.0
     only: str = ""
     blacklist_terms: List[str] = field(default_factory=list)
     highlight: HighlightConfig = field(default_factory=HighlightConfig)
@@ -1238,21 +1238,12 @@ def run_filter_once(
                 raise
             time.sleep(retry_delay_sec)
 
-    highlight_map: Dict[str, List[str]] = {}
-    for ho in result.highlights:
-        slug = ho.market.slug
-        side = (ho.outcome.name or "").upper()
-        if not side:
-            continue
-        highlight_map.setdefault(slug, []).append(side)
-
     topics: List[Dict[str, Any]] = []
-    for ms in result.chosen:
-        highlight_sides = highlight_map.get(ms.slug, [])
-        if not highlight_sides:
-            # 仅保留命中高亮条件的市场，避免不满足高亮口径的条目进入 topics 列表
-            continue
-        preferred_side = highlight_sides[0]
+
+    def _append_topic(ms: Any, snap: Any, hours: Optional[float] = None) -> None:
+        side = (snap.name or "").upper()
+        if not side:
+            return
         topics.append(
             {
                 "slug": ms.slug,
@@ -1262,10 +1253,28 @@ def run_filter_once(
                 "end_time": ms.end_time.isoformat() if ms.end_time else None,
                 "liquidity": ms.liquidity,
                 "total_volume": ms.totalVolume,
-                "preferred_side": preferred_side,
-                "highlight_sides": highlight_sides,
+                "preferred_side": side,
+                "highlight_sides": [side],
+                "hours_to_end": hours,
             }
         )
+
+    for ho in result.highlights:
+        _append_topic(ho.market, ho.outcome, ho.hours_to_end)
+
+    if not topics:
+        require_reversal = bool(filter_script.REVERSAL_ENABLED)
+        min_price = filter_script.REVERSAL_P2 if require_reversal else None
+        for ms in result.chosen:
+            hits = filter_script._highlight_outcomes(
+                ms,
+                require_reversal=require_reversal,
+                min_price=min_price,
+            )
+            if not hits:
+                continue
+            snap, hours = filter_script._best_outcome(hits)
+            _append_topic(ms, snap, hours)
 
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
