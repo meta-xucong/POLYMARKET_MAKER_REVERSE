@@ -1238,21 +1238,12 @@ def run_filter_once(
                 raise
             time.sleep(retry_delay_sec)
 
-    highlight_map: Dict[str, List[str]] = {}
-    for ho in result.highlights:
-        slug = ho.market.slug
-        side = (ho.outcome.name or "").upper()
-        if not side:
-            continue
-        highlight_map.setdefault(slug, []).append(side)
-
     topics: List[Dict[str, Any]] = []
-    for ms in result.chosen:
-        highlight_sides = highlight_map.get(ms.slug, [])
-        if not highlight_sides:
-            # 仅保留命中高亮条件的市场，避免不满足高亮口径的条目进入 topics 列表
-            continue
-        preferred_side = highlight_sides[0]
+
+    def _append_topic(ms: Any, snap: Any, hours: Optional[float] = None) -> None:
+        side = (snap.name or "").upper()
+        if not side:
+            return
         topics.append(
             {
                 "slug": ms.slug,
@@ -1262,10 +1253,28 @@ def run_filter_once(
                 "end_time": ms.end_time.isoformat() if ms.end_time else None,
                 "liquidity": ms.liquidity,
                 "total_volume": ms.totalVolume,
-                "preferred_side": preferred_side,
-                "highlight_sides": highlight_sides,
+                "preferred_side": side,
+                "highlight_sides": [side],
+                "hours_to_end": hours,
             }
         )
+
+    for ho in result.highlights:
+        _append_topic(ho.market, ho.outcome, ho.hours_to_end)
+
+    if not topics:
+        require_reversal = bool(filter_script.REVERSAL_ENABLED)
+        min_price = filter_script.REVERSAL_P2 if require_reversal else None
+        for ms in result.chosen:
+            hits = filter_script._highlight_outcomes(
+                ms,
+                require_reversal=require_reversal,
+                min_price=min_price,
+            )
+            if not hits:
+                continue
+            snap, hours = filter_script._best_outcome(hits)
+            _append_topic(ms, snap, hours)
 
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
