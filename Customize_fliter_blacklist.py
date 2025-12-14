@@ -1482,6 +1482,11 @@ def _print_highlighted(highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, f
 # -------------------------------
 
 def main():
+    global HIGHLIGHT_MAX_HOURS, HIGHLIGHT_MIN_TOTAL_VOLUME, HIGHLIGHT_MAX_ASK_DIFF
+    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P2, REVERSAL_WINDOW_HOURS
+    global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
+    global REVERSAL_LONG_FIDELITY
+
     filter_params_raw = _load_filter_params(FILTER_PARAMS_PATH)
     highlight_defaults = (
         filter_params_raw.get("highlight")
@@ -1518,11 +1523,6 @@ def main():
     default_rev_short_interval = str(reversal_defaults.get("short_interval", REVERSAL_SHORT_INTERVAL))
     default_rev_short_fidelity = int(reversal_defaults.get("short_fidelity", REVERSAL_SHORT_FIDELITY))
     default_rev_long_fidelity = int(reversal_defaults.get("long_fidelity", REVERSAL_LONG_FIDELITY))
-
-    global HIGHLIGHT_MAX_HOURS, HIGHLIGHT_MIN_TOTAL_VOLUME, HIGHLIGHT_MAX_ASK_DIFF
-    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P2, REVERSAL_WINDOW_HOURS
-    global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
-    global REVERSAL_LONG_FIDELITY
 
     if default_hl_max_hours is not None:
         HIGHLIGHT_MAX_HOURS = float(default_hl_max_hours)
@@ -1585,17 +1585,12 @@ def main():
     args = ap.parse_args()
 
     # 若指定了高亮参数，则覆盖全局 HIGHLIGHT_*，以便后续筛选与标签展示使用
-    global HIGHLIGHT_MAX_HOURS, HIGHLIGHT_MIN_TOTAL_VOLUME, HIGHLIGHT_MAX_ASK_DIFF
     if args.hl_max_hours is not None:
         HIGHLIGHT_MAX_HOURS = args.hl_max_hours
     if args.hl_min_total_volume is not None:
         HIGHLIGHT_MIN_TOTAL_VOLUME = args.hl_min_total_volume
     if args.hl_max_ask_diff is not None:
         HIGHLIGHT_MAX_ASK_DIFF = args.hl_max_ask_diff
-
-    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P2, REVERSAL_WINDOW_HOURS
-    global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
-    global REVERSAL_LONG_FIDELITY
 
     REVERSAL_ENABLED = default_rev_enabled and (not args.disable_reversal)
     REVERSAL_P1 = args.rev_p1
