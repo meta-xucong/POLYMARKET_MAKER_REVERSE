@@ -295,9 +295,9 @@ class GlobalConfig:
 
 @dataclass
 class HighlightConfig:
-    max_hours: Optional[float] = 72.0
-    min_total_volume: Optional[float] = 20000.0
-    max_ask_diff: Optional[float] = 0.2
+    max_hours: Optional[float] = filter_script.HIGHLIGHT_MAX_HOURS
+    min_total_volume: Optional[float] = filter_script.HIGHLIGHT_MIN_TOTAL_VOLUME
+    max_ask_diff: Optional[float] = filter_script.HIGHLIGHT_MAX_ASK_DIFF
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "HighlightConfig":
@@ -375,15 +375,15 @@ class ReversalConfig:
 @dataclass
 class FilterConfig:
     min_end_hours: float = filter_script.DEFAULT_MIN_END_HOURS
-    max_end_days: int = 5
-    gamma_window_days: int = 2
-    gamma_min_window_hours: int = 1
+    max_end_days: int = filter_script.DEFAULT_MAX_END_DAYS
+    gamma_window_days: int = filter_script.DEFAULT_GAMMA_WINDOW_DAYS
+    gamma_min_window_hours: int = filter_script.DEFAULT_GAMMA_MIN_WINDOW_HOURS
     legacy_end_days: int = filter_script.DEFAULT_LEGACY_END_DAYS
     allow_illiquid: bool = False
     skip_orderbook: bool = False
     no_rest_backfill: bool = False
     books_batch_size: int = 200
-    books_timeout_sec: float = 5.0
+    books_timeout_sec: float = 10.0
     only: str = ""
     blacklist_terms: List[str] = field(default_factory=list)
     highlight: HighlightConfig = field(default_factory=HighlightConfig)
