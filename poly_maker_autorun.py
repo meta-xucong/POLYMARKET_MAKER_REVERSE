@@ -1238,21 +1238,12 @@ def run_filter_once(
                 raise
             time.sleep(retry_delay_sec)
 
-    highlight_map: Dict[str, List[str]] = {}
+    topics: List[Dict[str, Any]] = []
     for ho in result.highlights:
-        slug = ho.market.slug
+        ms = ho.market
         side = (ho.outcome.name or "").upper()
         if not side:
             continue
-        highlight_map.setdefault(slug, []).append(side)
-
-    topics: List[Dict[str, Any]] = []
-    for ms in result.chosen:
-        highlight_sides = highlight_map.get(ms.slug, [])
-        if not highlight_sides:
-            # 仅保留命中高亮条件的市场，避免不满足高亮口径的条目进入 topics 列表
-            continue
-        preferred_side = highlight_sides[0]
         topics.append(
             {
                 "slug": ms.slug,
@@ -1262,8 +1253,8 @@ def run_filter_once(
                 "end_time": ms.end_time.isoformat() if ms.end_time else None,
                 "liquidity": ms.liquidity,
                 "total_volume": ms.totalVolume,
-                "preferred_side": preferred_side,
-                "highlight_sides": highlight_sides,
+                "preferred_side": side,
+                "highlight_sides": [side],
             }
         )
 
