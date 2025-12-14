@@ -1239,11 +1239,11 @@ def run_filter_once(
             time.sleep(retry_delay_sec)
 
     topics: List[Dict[str, Any]] = []
-    for ho in result.highlights:
-        ms = ho.market
-        side = (ho.outcome.name or "").upper()
+
+    def _append_topic(ms: Any, snap: Any, hours: Optional[float] = None) -> None:
+        side = (snap.name or "").upper()
         if not side:
-            continue
+            return
         topics.append(
             {
                 "slug": ms.slug,
@@ -1255,8 +1255,26 @@ def run_filter_once(
                 "total_volume": ms.totalVolume,
                 "preferred_side": side,
                 "highlight_sides": [side],
+                "hours_to_end": hours,
             }
         )
+
+    for ho in result.highlights:
+        _append_topic(ho.market, ho.outcome, ho.hours_to_end)
+
+    if not topics:
+        require_reversal = bool(filter_script.REVERSAL_ENABLED)
+        min_price = filter_script.REVERSAL_P2 if require_reversal else None
+        for ms in result.chosen:
+            hits = filter_script._highlight_outcomes(
+                ms,
+                require_reversal=require_reversal,
+                min_price=min_price,
+            )
+            if not hits:
+                continue
+            snap, hours = filter_script._best_outcome(hits)
+            _append_topic(ms, snap, hours)
 
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
