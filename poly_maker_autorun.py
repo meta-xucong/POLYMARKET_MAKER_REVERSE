@@ -1172,7 +1172,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--filter-config",
         type=Path,
-        default=MAKER_ROOT / "config" / "filter_params.json",
+        default=filter_script.FILTER_PARAMS_PATH,
         help="筛选参数配置 JSON 路径",
     )
     parser.add_argument(
@@ -1300,6 +1300,25 @@ def run_filter_once(
             snap, hours = filter_script._best_outcome(hits)
             _append_topic(ms, snap, hours)
 
+    # 补充打印与脚本 main() 一致的高亮/计数摘要，方便排查“autorun 日志少”时的实际筛选结果。
+    try:
+        printable_highlights = [
+            (ho.market, ho.outcome, ho.hours_to_end) for ho in result.highlights
+        ]
+        if printable_highlights:
+            print("")
+            filter_script._print_highlighted(printable_highlights)
+        print("")
+        print(
+            "[INFO] 通过筛选的市场数量（粗筛/高亮/最终）"
+            f"：{len(result.candidates)} / {result.highlight_candidates_count} / {len(result.chosen)}"
+            f"（总 {result.total_markets}）"
+        )
+        print(f"[INFO] 合并同类项数量：{result.merged_event_count}")
+        print(f"[INFO] 未获取到事件ID的数量：{result.missing_event_id_count}")
+    except Exception as exc:  # pragma: no cover - 打印失败不影响结果
+        print(f"[WARN] 打印筛选摘要失败：{exc}")
+
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "params": filter_conf.to_dict(),
@@ -1318,6 +1337,8 @@ def run_filter_once(
 def main(argv: Optional[List[str]] = None) -> None:
     args = parse_args(argv)
     global_conf, strategy_conf, filter_conf, run_params_template = load_configs(args)
+
+    print(f"[INFO] 使用筛选配置文件：{args.filter_config.resolve()}")
 
     manager = AutoRunManager(global_conf, strategy_conf, filter_conf, run_params_template)
 
