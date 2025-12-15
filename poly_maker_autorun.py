@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import math
 import random
@@ -136,12 +137,35 @@ def _load_filter_params_strict(path: Path) -> Dict[str, Any]:
     Customize_fliter_blacklist.py 的行为一致。
     """
 
+    path = Path(path).expanduser().resolve(strict=False)
     params = filter_script._load_filter_params(path)
     if not isinstance(params, dict) or not params:
         raise RuntimeError(
             f"筛选配置 {path} 为空或不可用，autorun 需要与 Customize_fliter_blacklist.py 使用同一份配置"
         )
     return params
+
+
+def _fingerprint_file(path: Path) -> str:
+    """返回文件指纹信息（路径、mtime、sha1），便于确认配置一致性。"""
+
+    try:
+        stat = path.stat()
+    except OSError:
+        return f"path={path} (unavailable)"
+
+    sha1 = hashlib.sha1()
+    try:
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha1.update(chunk)
+        digest = sha1.hexdigest()
+    except OSError:
+        digest = "<unreadable>"
+
+    return (
+        f"path={path} | mtime={stat.st_mtime:.0f} | size={stat.st_size} | sha1={digest}"
+    )
 
 
 def _dump_json_file(path: Path, data: Dict[str, Any]) -> None:
@@ -1031,7 +1055,10 @@ class AutoRunManager:
             self.filter_config = FilterConfig.from_dict(filter_conf_raw)
             self._filter_conf_mtime = current_mtime
             print(
-                f"[CONFIG] 已重新加载筛选配置（每 {FILTER_CONFIG_RELOAD_INTERVAL_SEC // 60:.0f} 分钟轮询一次）。"
+                "[CONFIG] 已重新加载筛选配置（每 {:.0f} 分钟轮询一次）：{}".format(
+                    FILTER_CONFIG_RELOAD_INTERVAL_SEC // 60,
+                    _fingerprint_file(self.config.filter_params_path),
+                )
             )
         except Exception as exc:  # pragma: no cover - 文件读取/解析异常
             print(f"[WARN] 重载筛选配置失败，将继续使用旧配置：{exc}")
@@ -1199,11 +1226,17 @@ def load_configs(
 ) -> tuple[GlobalConfig, Dict[str, Any], FilterConfig, Dict[str, Any]]:
     global_conf_raw = _load_json_file(args.global_config)
     strategy_conf_raw = _load_json_file(args.strategy_config)
+    filter_config_path = Path(args.filter_config).expanduser().resolve(strict=False)
     # 严格使用 Customize_fliter_blacklist.py 的配置入口，避免 autorun 静默带入默认参数。
-    filter_conf_raw = _load_filter_params_strict(args.filter_config)
+    filter_conf_raw = _load_filter_params_strict(filter_config_path)
     run_params_template = _load_json_file(args.run_config_template)
+
+    global_conf = GlobalConfig.from_dict(global_conf_raw)
+    # CLI/环境变量优先，强制与 Customize_fliter_blacklist.py 共用同一份配置文件
+    global_conf.filter_params_path = filter_config_path
+
     return (
-        GlobalConfig.from_dict(global_conf_raw),
+        global_conf,
         strategy_conf_raw,
         FilterConfig.from_dict(filter_conf_raw),
         run_params_template,
@@ -1338,7 +1371,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parse_args(argv)
     global_conf, strategy_conf, filter_conf, run_params_template = load_configs(args)
 
-    print(f"[INFO] 使用筛选配置文件：{args.filter_config.resolve()}")
+    print(
+        "[INFO] 使用筛选配置文件：{}".format(
+            _fingerprint_file(global_conf.filter_params_path)
+        )
+    )
 
     manager = AutoRunManager(global_conf, strategy_conf, filter_conf, run_params_template)
 
