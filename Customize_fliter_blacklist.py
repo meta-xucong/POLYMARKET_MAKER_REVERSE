@@ -251,9 +251,16 @@ def _request_with_backoff(
             time.sleep(sleep_for)
             attempt += 1
         except requests.RequestException as exc:
+            hint = ""
+            if isinstance(exc, requests.exceptions.ConnectionError):
+                hint = (
+                    " | 网络连接失败，无法访问 POLY_HOST="
+                    f"{_POLY_HOST}，请检查外网连通性/代理配置"
+                )
+
             if attempt >= retries:
                 print(
-                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}",
+                    f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}{hint}",
                     file=sys.stderr,
                 )
                 return None
@@ -262,7 +269,7 @@ def _request_with_backoff(
             jitter = min(wait * 0.1, 1.0)
             sleep_for = wait + random.random() * jitter
             print(
-                f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}，{sleep_for:.1f}s 后重试…",
+                f"[WARN] 请求失败（{attempt}/{retries}）：{url} params={params} -> {exc}{hint}，{sleep_for:.1f}s 后重试…",
                 flush=True,
             )
             time.sleep(sleep_for)
