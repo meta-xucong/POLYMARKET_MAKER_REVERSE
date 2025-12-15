@@ -1218,7 +1218,13 @@ def run_filter_once(
     max_retries: int = 0,
     retry_delay_sec: float = 3.0,
 ) -> List[Dict[str, Any]]:
-    """调用筛选脚本，落盘 JSON，并返回话题列表，带超时与可选重试。"""
+    """调用筛选脚本，落盘 JSON，并返回话题列表，带超时与可选重试。
+
+    注意：不再无条件使用线程池。直接调用可以保证筛选流程与手动运行
+    Customize_fliter_blacklist.py 完全一致（包含时间切片、翻页等），避免
+    因线程调度差异导致流程提前结束。如果显式配置了超时再降级为线程池
+    以支持 future.result(timeout)。
+    """
 
     filter_conf.apply_blacklist()
     filter_conf.apply_highlight()
@@ -1228,15 +1234,16 @@ def run_filter_once(
     for attempt in range(1, attempts + 1):
         timeout_label = f"{timeout_sec}s" if timeout_sec is not None else "no-timeout"
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    filter_script.collect_filter_results, **filter_conf.to_filter_kwargs()
+            if timeout_sec is None:
+                result = filter_script.collect_filter_results(
+                    **filter_conf.to_filter_kwargs()
                 )
-                result = (
-                    future.result(timeout=timeout_sec)
-                    if timeout_sec is not None
-                    else future.result()
-                )
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        filter_script.collect_filter_results, **filter_conf.to_filter_kwargs()
+                    )
+                    result = future.result(timeout=timeout_sec)
             break
         except concurrent.futures.TimeoutError as exc:  # pragma: no cover - 线程超时
             print(
