@@ -74,7 +74,7 @@
     "p2": 0.8,
     "window_hours": 6,
     "lookback_days": 5,
-    "short_interval": "4h",
+    "short_interval": "6h",
     "short_fidelity": 15,
     "long_fidelity": 60
   }
