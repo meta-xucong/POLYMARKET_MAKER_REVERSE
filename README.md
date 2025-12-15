@@ -1,11 +1,11 @@
 # POLYMARKET_MAKER_AUTO 使用说明
 
 ## 项目概览
-本仓库提供多话题挂单策略的自动化运行流程：`poly_maker_autorun.py` 会调用 `Customize_fliter_blacklist.py` 进行市场筛选，再按预设策略启动 `POLYMARKET_MAKER/Volatility_arbitrage_run.py` 等交易脚本，实现自动去重、并发控制与运行状态监控。
+本仓库提供多话题挂单策略的自动化运行流程：`poly_maker_autorun.py` 会调用 `Customize_fliter_reverse.py` 进行市场筛选，再按预设策略启动 `POLYMARKET_MAKER/Volatility_arbitrage_run.py` 等交易脚本，实现自动去重、并发控制与运行状态监控。
 
 ## 目录与核心文件
 - `poly_maker_autorun.py`：自动化主控脚本，负责筛选、增量识别、任务调度与命令控制。
-- `Customize_fliter_blacklist.py`：REST-only 市场筛选脚本，支持高亮参数与流式输出。
+- `Customize_fliter_reverse.py`：REST-only 市场筛选脚本，支持高亮参数与流式输出。
 - `POLYMARKET_MAKER/config/`：调度、筛选与策略配置示例（`global_config.json`、`filter_params.json`、`strategy_defaults.json`、`run_params.json`、`trading.yaml`）。
 - `POLYMARKET_MAKER/logs/`：运行时数据与日志目录（筛选结果、去重状态、运行快照、子任务日志等，示例配置均指向此处）。
 
@@ -61,11 +61,11 @@
 ## 独立运行市场筛选脚本
 若仅需筛选，可直接运行：
 ```bash
-python Customize_fliter_blacklist.py --help
+python Customize_fliter_reverse.py --help
 ```
 常用示例：
 ```bash
-python Customize_fliter_blacklist.py \
+python Customize_fliter_reverse.py \
   --min-end-hours 1 --max-end-days 5 \
   --hl-max-hours 48 --hl-min-total-volume 20000 --hl-max-ask-diff 0.2 \
   --rev-p1 0.35 --rev-p2 0.8 --rev-window-hours 2 --rev-short-interval 6h
