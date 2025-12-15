@@ -1522,6 +1522,11 @@ def main():
     default_books_batch_size = int(filter_params_raw.get("books_batch_size", 200))
     default_books_timeout = float(filter_params_raw.get("books_timeout_sec", 10.0))
     default_only = str(filter_params_raw.get("only", ""))
+    default_blacklist_terms = [
+        str(t).strip()
+        for t in filter_params_raw.get("blacklist_terms", [])
+        if str(t).strip()
+    ]
 
     default_hl_max_hours = highlight_defaults.get("max_hours")
     default_hl_min_total_volume = highlight_defaults.get("min_total_volume")
@@ -1551,6 +1556,9 @@ def main():
     REVERSAL_SHORT_INTERVAL = default_rev_short_interval
     REVERSAL_SHORT_FIDELITY = default_rev_short_fidelity
     REVERSAL_LONG_FIDELITY = default_rev_long_fidelity
+
+    # 统一从配置文件加载黑名单关键词，确保与 autorun 行为一致
+    set_blacklist_terms(default_blacklist_terms)
 
     ap = argparse.ArgumentParser(description="Polymarket 市场筛选（REST-only：/books 批量回补买一/卖一）")
     ap.add_argument("--books-batch-size", type=int, default=default_books_batch_size, help="REST /books 批量回补的 token_id 数量上限（非流式模式）")
@@ -1765,6 +1773,7 @@ def main():
         books_batch_size=args.books_batch_size,
         books_timeout=args.books_timeout,
         only=args.only,
+        blacklist_terms=default_blacklist_terms,
         prefetched_markets=mkts_raw,
         enable_reversal=rev_enable,
         reversal_p1=rev_p1,
