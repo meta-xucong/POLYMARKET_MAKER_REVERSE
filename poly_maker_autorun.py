@@ -128,6 +128,22 @@ def _load_json_file(path: Path) -> Dict[str, Any]:
             raise RuntimeError(f"无法解析 JSON 配置: {path}: {exc}") from exc
 
 
+def _load_filter_params_strict(path: Path) -> Dict[str, Any]:
+    """与 Customize_fliter_blacklist.py 保持一致地加载筛选参数。
+
+    autorun 不应在筛选阶段携带任何额外参数；如果配置文件缺失或为空，
+    直接报错以避免静默退回到脚本内置默认值，确保与直接运行
+    Customize_fliter_blacklist.py 的行为一致。
+    """
+
+    params = filter_script._load_filter_params(path)
+    if not isinstance(params, dict) or not params:
+        raise RuntimeError(
+            f"筛选配置 {path} 为空或不可用，autorun 需要与 Customize_fliter_blacklist.py 使用同一份配置"
+        )
+    return params
+
+
 def _dump_json_file(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -1183,7 +1199,8 @@ def load_configs(
 ) -> tuple[GlobalConfig, Dict[str, Any], FilterConfig, Dict[str, Any]]:
     global_conf_raw = _load_json_file(args.global_config)
     strategy_conf_raw = _load_json_file(args.strategy_config)
-    filter_conf_raw = _load_json_file(args.filter_config)
+    # 严格使用 Customize_fliter_blacklist.py 的配置入口，避免 autorun 静默带入默认参数。
+    filter_conf_raw = _load_filter_params_strict(args.filter_config)
     run_params_template = _load_json_file(args.run_config_template)
     return (
         GlobalConfig.from_dict(global_conf_raw),
