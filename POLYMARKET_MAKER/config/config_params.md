@@ -64,7 +64,7 @@
 | `topics.*` | 针对特定话题 ID/slug 的覆盖：可单独调整 `topic_name`、`min_edge`、`max_position_per_market`、`order_size`、`spread_target`、`refresh_interval_seconds`、`max_open_orders`。 | 按字段类型填写 | 仅覆盖需要调整的字段，其余沿用 `default`。 |
 
 ## filter_params.json —— 市场筛选参数
-驱动 `Customize_fliter_blacklist.py` 的 REST 筛选器，字段与命令行参数一致，可配置高亮与价格反转检测等阈值。【F:POLYMARKET_MAKER/config/filter_params.json†L1-L71】【F:Customize_fliter_blacklist.py†L1214-L1280】
+驱动 `Customize_fliter_reverse.py` 的 REST 筛选器，字段与命令行参数一致，可配置高亮与价格反转检测等阈值。【F:POLYMARKET_MAKER/config/filter_params.json†L1-L71】【F:Customize_fliter_reverse.py†L1214-L1280】
 
 | 字段 | 作用 | 类型/格式 | 推荐设置 |
 | --- | --- | --- | --- |
@@ -92,4 +92,4 @@
 | `reversal.short_fidelity` | 短窗口 fidelity（分钟级采样）。 | 整数 | 10~30。 |
 | `reversal.long_fidelity` | 长窗口 fidelity（分钟级采样）。 | 整数 | 30~90。 |
 
-> 提示：`filter_params.json` 直接对应命令行参数，修改后无需转换即可被 `Customize_fliter_blacklist.py` 读取并复用，且高亮/反转参数会覆盖脚本顶部的默认值。【F:Customize_fliter_blacklist.py†L1214-L1280】【F:Customize_fliter_blacklist.py†L1249-L1280】
+> 提示：`filter_params.json` 直接对应命令行参数，修改后无需转换即可被 `Customize_fliter_reverse.py` 读取并复用，且高亮/反转参数会覆盖脚本顶部的默认值。【F:Customize_fliter_reverse.py†L1214-L1280】【F:Customize_fliter_reverse.py†L1249-L1280】
