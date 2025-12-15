@@ -90,7 +90,7 @@ _request_lock = threading.Lock()
 
 DEFAULT_RUN_CONFIG_PATH = os.getenv(
     "POLY_RUN_CONFIG_PATH",
-    os.path.join(os.path.dirname(__file__), "config", "run_params.json"),
+    os.path.join(os.path.dirname(__file__), "config", "run_params_reverse.json"),
 )
 
 DEFAULT_DEADLINE_FALLBACK = {

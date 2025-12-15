@@ -2,7 +2,7 @@
 
 本文件汇总 `POLYMARKET_MAKER/config/` 目录下各个 JSON 配置的字段含义、推荐取值与格式要求，方便在自动化脚本或单市场策略运行前快速校验参数。
 
-## run_params.json —— 单市场运行参数
+## run_params_reverse.json —— 单市场运行参数
 用于 `Volatility_arbitrage_run.py` 等单市场脚本。所有百分比字段均支持写成 0~1 之间的小数；若填写大于 1 的数值会被视作百分比并自动除以 100（如填写 5 代表 5%）。【F:POLYMARKET_MAKER/Volatility_arbitrage_run.py†L138-L147】
 
 | 字段 | 作用 | 类型/格式 | 推荐设置 |
@@ -30,8 +30,8 @@
 | `countdown.absolute_time` | 直接指定倒计时开始的绝对时间，支持时间戳、ISO 字符串（`YYYY-MM-DDTHH:MM:SSZ`）或简单日期/日期时间文本。【F:POLYMARKET_MAKER/Volatility_arbitrage_run.py†L436-L476】【F:POLYMARKET_MAKER/Volatility_arbitrage_run.py†L1981-L2019】 | 数字或字符串 | 优先写 UTC/带时区的 ISO 格式。 |
 | `countdown.timezone` | 当 `absolute_time` 只写日期/无时区时，用于推断时区。 | IANA 时区名称 | 与市场时区一致即可。 |
 
-## global_config.json —— 自动化调度与路径
-供 `poly_maker_autorun.py` 使用，控制筛选/调度循环、文件路径与重试策略。【F:poly_maker_autorun.py†L32-L48】【F:poly_maker_autorun.py†L117-L219】
+## global_config_reverse.json —— 自动化调度与路径
+供 `poly_maker_reverse.py` 使用，控制筛选/调度循环、文件路径与重试策略。【F:poly_maker_reverse.py†L32-L48】【F:poly_maker_reverse.py†L117-L219】
 
 | 字段 | 作用 | 类型/格式 | 推荐设置 |
 | --- | --- | --- | --- |
@@ -50,8 +50,8 @@
 | `monitoring.metrics_flush_interval_seconds` | 指标刷写周期。 | 整数/浮点（秒） | 15 秒默认。 |
 | `monitoring.healthcheck_interval_seconds` | 健康检查间隔。 | 整数/浮点（秒） | 30 秒默认。 |
 
-## strategy_defaults.json —— 策略模板
-为不同话题/主题提供默认下单参数与覆盖示例。【F:POLYMARKET_MAKER/config/strategy_defaults.json†L1-L24】
+## strategy_defaults_reverse.json —— 策略模板
+为不同话题/主题提供默认下单参数与覆盖示例。【F:POLYMARKET_MAKER/config/strategy_defaults_reverse.json†L1-L24】
 
 | 字段 | 作用 | 类型/格式 | 推荐设置 |
 | --- | --- | --- | --- |
@@ -63,8 +63,8 @@
 | `default.max_open_orders` | 同时挂单数量上限。 | 整数 | 10~30。 |
 | `topics.*` | 针对特定话题 ID/slug 的覆盖：可单独调整 `topic_name`、`min_edge`、`max_position_per_market`、`order_size`、`spread_target`、`refresh_interval_seconds`、`max_open_orders`。 | 按字段类型填写 | 仅覆盖需要调整的字段，其余沿用 `default`。 |
 
-## filter_params.json —— 市场筛选参数
-驱动 `Customize_fliter_reverse.py` 的 REST 筛选器，字段与命令行参数一致，可配置高亮与价格反转检测等阈值。【F:POLYMARKET_MAKER/config/filter_params.json†L1-L71】【F:Customize_fliter_reverse.py†L1214-L1280】
+## filter_params_reverse.json —— 市场筛选参数
+驱动 `Customize_fliter_reverse.py` 的 REST 筛选器，字段与命令行参数一致，可配置高亮与价格反转检测等阈值。【F:POLYMARKET_MAKER/config/filter_params_reverse.json†L1-L71】【F:Customize_fliter_reverse.py†L1214-L1280】
 
 | 字段 | 作用 | 类型/格式 | 推荐设置 |
 | --- | --- | --- | --- |
@@ -92,4 +92,4 @@
 | `reversal.short_fidelity` | 短窗口 fidelity（分钟级采样）。 | 整数 | 10~30。 |
 | `reversal.long_fidelity` | 长窗口 fidelity（分钟级采样）。 | 整数 | 30~90。 |
 
-> 提示：`filter_params.json` 直接对应命令行参数，修改后无需转换即可被 `Customize_fliter_reverse.py` 读取并复用，且高亮/反转参数会覆盖脚本顶部的默认值。【F:Customize_fliter_reverse.py†L1214-L1280】【F:Customize_fliter_reverse.py†L1249-L1280】
+> 提示：`filter_params_reverse.json` 直接对应命令行参数，修改后无需转换即可被 `Customize_fliter_reverse.py` 读取并复用，且高亮/反转参数会覆盖脚本顶部的默认值。【F:Customize_fliter_reverse.py†L1214-L1280】【F:Customize_fliter_reverse.py†L1249-L1280】

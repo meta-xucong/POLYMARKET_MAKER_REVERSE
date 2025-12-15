@@ -1,4 +1,4 @@
-import poly_maker_autorun as module
+import poly_maker_reverse as module
 
 
 def _build_manager(tmp_path):
@@ -7,7 +7,7 @@ def _build_manager(tmp_path):
         "data_dir": tmp_path / "data",
         "handled_topics_path": tmp_path / "handled.json",
         "filter_output_path": tmp_path / "topics.json",
-        "filter_params_path": tmp_path / "filter_params.json",
+        "filter_params_path": tmp_path / "filter_params_reverse.json",
         "runtime_status_path": tmp_path / "status.json",
     }
     global_conf = module.GlobalConfig(

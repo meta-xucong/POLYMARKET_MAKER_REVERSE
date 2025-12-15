@@ -7,11 +7,11 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# 在导入 poly_maker_autorun 之前打桩 requests，避免缺失依赖导致提前退出。
+# 在导入 poly_maker_reverse 之前打桩 requests，避免缺失依赖导致提前退出。
 if "requests" not in sys.modules:
     sys.modules["requests"] = types.SimpleNamespace()
 
-from poly_maker_autorun import _scale_order_size_by_volume
+from poly_maker_reverse import _scale_order_size_by_volume
 
 
 def test_scale_order_size_high_volume_is_dampened():

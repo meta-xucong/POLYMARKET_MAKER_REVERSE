@@ -1,5 +1,5 @@
 """
-poly_maker_autorun
+poly_maker_reverse
 -------------------
 
 基础骨架：配置加载、主循环、命令/交互入口。
@@ -41,7 +41,7 @@ DEFAULT_GLOBAL_CONFIG = {
     "data_dir": str(MAKER_ROOT / "data"),
     "handled_topics_path": str(MAKER_ROOT / "data" / "handled_topics.json"),
     "filter_output_path": str(MAKER_ROOT / "data" / "topics_filtered.json"),
-    "filter_params_path": str(MAKER_ROOT / "config" / "filter_params.json"),
+    "filter_params_path": str(MAKER_ROOT / "config" / "filter_params_reverse.json"),
     "filter_timeout_sec": None,
     "filter_max_retries": 1,
     "filter_retry_delay_sec": 3.0,
@@ -268,7 +268,7 @@ class GlobalConfig:
         filter_params_path = Path(
             merged.get("filter_params_path")
             or paths.get("filter_params_file")
-            or MAKER_ROOT / "config" / "filter_params.json"
+            or MAKER_ROOT / "config" / "filter_params_reverse.json"
         )
         runtime_status_path = Path(
             merged.get("runtime_status_path")
@@ -1187,13 +1187,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--global-config",
         type=Path,
-        default=MAKER_ROOT / "config" / "global_config.json",
+        default=MAKER_ROOT / "config" / "global_config_reverse.json",
         help="全局调度配置 JSON 路径",
     )
     parser.add_argument(
         "--strategy-config",
         type=Path,
-        default=MAKER_ROOT / "config" / "strategy_defaults.json",
+        default=MAKER_ROOT / "config" / "strategy_defaults_reverse.json",
         help="策略参数模板 JSON 路径",
     )
     parser.add_argument(
@@ -1205,7 +1205,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--run-config-template",
         type=Path,
-        default=MAKER_ROOT / "config" / "run_params.json",
+        default=MAKER_ROOT / "config" / "run_params_reverse.json",
         help="运行参数模板 JSON 路径（传递给 Volatility_arbitrage_run.py）",
     )
     parser.add_argument(
