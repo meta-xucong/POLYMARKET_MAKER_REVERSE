@@ -1269,12 +1269,13 @@ def run_filter_once(
         try:
             if timeout_sec is None:
                 result = filter_script.collect_filter_results(
-                    **filter_conf.to_filter_kwargs()
+                    **filter_conf.to_filter_kwargs(),
                 )
             else:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(
-                        filter_script.collect_filter_results, **filter_conf.to_filter_kwargs()
+                        filter_script.collect_filter_results,
+                        **filter_conf.to_filter_kwargs(),
                     )
                     result = future.result(timeout=timeout_sec)
             break
@@ -1315,6 +1316,11 @@ def run_filter_once(
                 "hours_to_end": hours,
             }
         )
+
+    print(
+        f"[TRACE] 粗筛完成：候选 {len(result.candidates)} / 抓取 {result.total_markets}，",
+        f"被拒 {len(result.rejected)}，高亮候选 {result.highlight_candidates_count}",
+    )
 
     for ho in result.highlights:
         _append_topic(ho.market, ho.outcome, ho.hours_to_end)
