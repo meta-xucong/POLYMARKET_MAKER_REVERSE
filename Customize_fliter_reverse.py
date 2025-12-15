@@ -75,7 +75,7 @@ REVERSAL_LONG_FIDELITY: int = 60          # 长窗口 fidelity
 
 # 默认筛选配置文件路径（用于覆写上述默认值）
 DEFAULT_FILTER_PARAMS_PATH = (
-    Path(__file__).resolve().parent / "POLYMARKET_MAKER" / "config" / "filter_params.json"
+    Path(__file__).resolve().parent / "POLYMARKET_MAKER" / "config" / "filter_params_reverse.json"
 )
 # 允许通过环境变量统一指定配置路径（autorun 与手动脚本共享同一份文件）
 FILTER_PARAMS_PATH = Path(os.environ.get("FILTER_PARAMS_PATH", DEFAULT_FILTER_PARAMS_PATH))

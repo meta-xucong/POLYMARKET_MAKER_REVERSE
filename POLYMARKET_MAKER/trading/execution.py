@@ -895,10 +895,10 @@ class ClobPolymarketAPI(PolymarketAPI):
 
 
 def load_default_config(path: Optional[str] = None) -> ExecutionConfig:
-    """Load execution config from YAML, defaulting to ``config/trading.yaml``."""
+    """Load execution config from YAML, defaulting to ``config/trading_reverse.yaml``."""
 
     if path is None:
-        path = str(Path(__file__).resolve().parents[1] / "config" / "trading.yaml")
+        path = str(Path(__file__).resolve().parents[1] / "config" / "trading_reverse.yaml")
     return ExecutionConfig.from_yaml(path)
 
 
