@@ -1263,18 +1263,37 @@ def run_filter_once(
     filter_conf.apply_highlight()
     filter_conf.apply_reversal()
 
+    # 完整复刻 Customize_fliter_reverse.py 的非流式主流程：
+    # 1) 先按时间窗口抓取市场，再将 prefetched_markets 传递给 collect_filter_results，
+    #    避免因不同的抓取时机或分页导致结果不一致。
+    now = filter_script._now_utc()
+    end_min = now + filter_script.dt.timedelta(hours=filter_conf.min_end_hours)
+    end_max = now + filter_script.dt.timedelta(days=filter_conf.max_end_days)
+    mkts_raw = filter_script.fetch_markets_windowed(
+        end_min,
+        end_max,
+        window_days=filter_conf.gamma_window_days,
+        min_window_hours=filter_conf.gamma_min_window_hours,
+    )
+    print(
+        f"[TRACE] 采用时间切片抓取完成：共获取 {len(mkts_raw)} 条（窗口={filter_conf.gamma_window_days} 天，最小窗口={filter_conf.gamma_min_window_hours} 小时）"
+    )
+
     attempts = max(1, int(max_retries) + 1)
     for attempt in range(1, attempts + 1):
         timeout_label = f"{timeout_sec}s" if timeout_sec is not None else "no-timeout"
         try:
             if timeout_sec is None:
                 result = filter_script.collect_filter_results(
-                    **filter_conf.to_filter_kwargs()
+                    prefetched_markets=mkts_raw,
+                    **filter_conf.to_filter_kwargs(),
                 )
             else:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(
-                        filter_script.collect_filter_results, **filter_conf.to_filter_kwargs()
+                        filter_script.collect_filter_results,
+                        prefetched_markets=mkts_raw,
+                        **filter_conf.to_filter_kwargs(),
                     )
                     result = future.result(timeout=timeout_sec)
             break
