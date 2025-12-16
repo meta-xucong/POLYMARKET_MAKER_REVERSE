@@ -57,6 +57,7 @@ HIGHLIGHT_MAX_ASK_DIFF: float = 0.10         # 同一 token 点差 |ask - bid| �
 # 价格反转检测默认参数
 REVERSAL_ENABLED: bool = True
 REVERSAL_P1: float = 0.35                 # 旧段最高价上限
+REVERSAL_P1_RATIO: float = 0.9            # 旧段价格低于 p1 的占比下限
 REVERSAL_P2: float = 0.80                 # 近段最高价下限
 REVERSAL_WINDOW_HOURS: float = 2.0        # 近段窗口（小时）
 REVERSAL_LOOKBACK_DAYS: float = 5.0       # 旧段回溯天数
@@ -903,6 +904,7 @@ def detect_reversal(
     token_id: Optional[str],
     *,
     p1: float = REVERSAL_P1,
+    p1_ratio: float = REVERSAL_P1_RATIO,
     p2: float = REVERSAL_P2,
     window_hours: float = REVERSAL_WINDOW_HOURS,
     lookback_days: float = REVERSAL_LOOKBACK_DAYS,
@@ -958,34 +960,39 @@ def detect_reversal(
         if lookback_start_ts <= ts <= recent_start_ts
     ]
     max_old = _max_price_in_range(old_points, lookback_start_ts, recent_start_ts)
-    old_below_ratio = _ratio_below_threshold(
-        old_points, lookback_start_ts, recent_start_ts, p1
-    )
+    old_ratio = _ratio_below_threshold(old_points, lookback_start_ts, recent_start_ts, p1)
 
     hit = bool(
         max_recent is not None
         and max_recent >= p2
-        and old_below_ratio is not None
-        and old_below_ratio >= 0.9
+        and max_old is not None
+        and max_old <= p1
+        and old_ratio is not None
+        and old_ratio >= p1_ratio
     )
     detail = {
         "points_long": len(long_points),
         "points_short": len(short_points),
         "max_recent": max_recent,
         "max_old": max_old,
-        "old_below_ratio": old_below_ratio,
+        "old_ratio": old_ratio,
         "old_points": len(old_points),
         "max_recent_short": max_recent_short,
         "window_hours": window_hours,
         "lookback_days": lookback_days,
         "p1": p1,
+        "p1_ratio": p1_ratio,
         "p2": p2,
     }
     if not hit:
-        if old_below_ratio is None:
+        if max_old is None:
             detail["reason"] = "长窗口旧段缺少价格点"
-        elif old_below_ratio < 0.9:
-            detail["reason"] = f"旧段低于 p1 占比不足（{old_below_ratio:.3f}）"
+        elif max_old > p1:
+            detail["reason"] = f"旧段最高价高于 p1（{max_old:.4f}）"
+        elif old_ratio is None:
+            detail["reason"] = "旧段缺少占比统计数据"
+        elif old_ratio < p1_ratio:
+            detail["reason"] = f"旧段低于 p1 占比不足（{old_ratio:.2%}）"
         else:
             detail["reason"] = "长窗口未满足反转"
     return hit, detail
@@ -1252,6 +1259,7 @@ def collect_filter_results(
     prefetched_markets: Optional[List[Dict[str, Any]]] = None,
     enable_reversal: bool = REVERSAL_ENABLED,
     reversal_p1: float = REVERSAL_P1,
+    reversal_p1_ratio: float = REVERSAL_P1_RATIO,
     reversal_p2: float = REVERSAL_P2,
     reversal_window_hours: float = REVERSAL_WINDOW_HOURS,
     reversal_lookback_days: float = REVERSAL_LOOKBACK_DAYS,
@@ -1261,12 +1269,13 @@ def collect_filter_results(
 ) -> FilterResult:
     """执行一次筛选流程并返回结构化结果。"""
 
-    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P2, REVERSAL_WINDOW_HOURS
+    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P1_RATIO, REVERSAL_P2, REVERSAL_WINDOW_HOURS
     global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
     global REVERSAL_LONG_FIDELITY
 
     REVERSAL_ENABLED = enable_reversal
     REVERSAL_P1 = reversal_p1
+    REVERSAL_P1_RATIO = reversal_p1_ratio
     REVERSAL_P2 = reversal_p2
     REVERSAL_WINDOW_HOURS = reversal_window_hours
     REVERSAL_LOOKBACK_DAYS = reversal_lookback_days
@@ -1330,7 +1339,7 @@ def collect_filter_results(
 
     if enable_reversal and highlight_candidates:
         print(
-            f"[HEARTBEAT] 开始价格反转检测：{len(highlight_candidates)} 个市场，p1={reversal_p1}, p2={reversal_p2}, window={reversal_window_hours}h, lookback={reversal_lookback_days}d",
+            f"[HEARTBEAT] 开始价格反转检测：{len(highlight_candidates)} 个市场，p1={reversal_p1}, p1_ratio={reversal_p1_ratio}, p2={reversal_p2}, window={reversal_window_hours}h, lookback={reversal_lookback_days}d",
             flush=True,
         )
         total_markets = len(highlight_candidates)
@@ -1342,6 +1351,7 @@ def collect_filter_results(
                 hit, detail = detect_reversal(
                     token_id,
                     p1=reversal_p1,
+                    p1_ratio=reversal_p1_ratio,
                     p2=reversal_p2,
                     window_hours=reversal_window_hours,
                     lookback_days=reversal_lookback_days,
@@ -1471,7 +1481,7 @@ def _print_highlighted(highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, f
         rev_status = "REV✔" if ms.reversal_hit else "REV✘"
         max_old = detail.get("max_old")
         max_recent = detail.get("max_recent") or detail.get("max_recent_short")
-        old_ratio = detail.get("old_below_ratio")
+        old_ratio = detail.get("old_ratio")
         rev_desc_parts = [rev_status]
         if max_old is not None:
             rev_desc_parts.append(f"old_max={max_old:.3f}")
@@ -1495,7 +1505,7 @@ def _print_highlighted(highlights: List[Tuple[MarketSnapshot, OutcomeSnapshot, f
 
 def main():
     global HIGHLIGHT_MAX_HOURS, HIGHLIGHT_MIN_TOTAL_VOLUME, HIGHLIGHT_MAX_ASK_DIFF
-    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P2, REVERSAL_WINDOW_HOURS
+    global REVERSAL_ENABLED, REVERSAL_P1, REVERSAL_P1_RATIO, REVERSAL_P2, REVERSAL_WINDOW_HOURS
     global REVERSAL_LOOKBACK_DAYS, REVERSAL_SHORT_INTERVAL, REVERSAL_SHORT_FIDELITY
     global REVERSAL_LONG_FIDELITY
 
@@ -1534,6 +1544,7 @@ def main():
 
     default_rev_enabled = bool(reversal_defaults.get("enabled", REVERSAL_ENABLED))
     default_rev_p1 = float(reversal_defaults.get("p1", REVERSAL_P1))
+    default_rev_p1_ratio = float(reversal_defaults.get("p1_ratio", REVERSAL_P1_RATIO))
     default_rev_p2 = float(reversal_defaults.get("p2", REVERSAL_P2))
     default_rev_window = float(reversal_defaults.get("window_hours", REVERSAL_WINDOW_HOURS))
     default_rev_lookback = float(reversal_defaults.get("lookback_days", REVERSAL_LOOKBACK_DAYS))
@@ -1550,6 +1561,7 @@ def main():
 
     REVERSAL_ENABLED = default_rev_enabled
     REVERSAL_P1 = default_rev_p1
+    REVERSAL_P1_RATIO = default_rev_p1_ratio
     REVERSAL_P2 = default_rev_p2
     REVERSAL_WINDOW_HOURS = default_rev_window
     REVERSAL_LOOKBACK_DAYS = default_rev_lookback
@@ -1585,6 +1597,7 @@ def main():
     # 价格反转检测参数
     ap.add_argument("--disable-reversal", action="store_true", help="关闭价格反转检测（默认开启）")
     ap.add_argument("--rev-p1", type=float, default=default_rev_p1, help="反转判定：旧段最高价需低于该值（默认 0.35）")
+    ap.add_argument("--rev-p1-ratio", type=float, default=default_rev_p1_ratio, help="反转判定：旧段价格低于 p1 的占比下限（默认 0.9）")
     ap.add_argument("--rev-p2", type=float, default=default_rev_p2, help="反转判定：近段最高价需高于该值（默认 0.80）")
     ap.add_argument("--rev-window-hours", type=float, default=default_rev_window, help="反转判定：近段窗口大小（小时，默认 2）")
     ap.add_argument("--rev-lookback-days", type=float, default=default_rev_lookback, help="反转判定：旧段回溯天数（默认 5 天）")
@@ -1614,6 +1627,7 @@ def main():
 
     REVERSAL_ENABLED = default_rev_enabled and (not args.disable_reversal)
     REVERSAL_P1 = args.rev_p1
+    REVERSAL_P1_RATIO = args.rev_p1_ratio
     REVERSAL_P2 = args.rev_p2
     REVERSAL_WINDOW_HOURS = args.rev_window_hours
     REVERSAL_LOOKBACK_DAYS = args.rev_lookback_days
@@ -1623,6 +1637,7 @@ def main():
 
     rev_enable = REVERSAL_ENABLED
     rev_p1 = REVERSAL_P1
+    rev_p1_ratio = REVERSAL_P1_RATIO
     rev_p2 = REVERSAL_P2
     rev_window = REVERSAL_WINDOW_HOURS
     rev_lookback = REVERSAL_LOOKBACK_DAYS
@@ -1708,6 +1723,7 @@ def main():
                         hit, detail = detect_reversal(
                             token_id,
                             p1=rev_p1,
+                            p1_ratio=rev_p1_ratio,
                             p2=rev_p2,
                             window_hours=rev_window,
                             lookback_days=rev_lookback,
@@ -1777,6 +1793,7 @@ def main():
         prefetched_markets=mkts_raw,
         enable_reversal=rev_enable,
         reversal_p1=rev_p1,
+        reversal_p1_ratio=rev_p1_ratio,
         reversal_p2=rev_p2,
         reversal_window_hours=rev_window,
         reversal_lookback_days=rev_lookback,
