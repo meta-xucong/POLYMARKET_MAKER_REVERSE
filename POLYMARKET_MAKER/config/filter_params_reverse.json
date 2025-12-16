@@ -72,6 +72,7 @@
   "reversal": {
     "enabled": true,
     "p1": 0.45,
+    "p1_ratio": 0.9,
     "p2": 0.8,
     "window_hours": 6,
     "lookback_days": 5,
